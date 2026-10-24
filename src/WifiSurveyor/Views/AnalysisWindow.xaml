@@ -1,0 +1,61 @@
+<Window x:Class="WifiSurveyor.Views.AnalysisWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Survey analysis" Height="760" Width="980"
+        FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="13"
+        Foreground="{StaticResource InkBrush}" Background="White">
+  <DockPanel Margin="18">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,12,0,0">
+      <Button Content="Save as text…" Click="Save_Click"/>
+      <Button Content="Copy" Click="Copy_Click"/>
+      <Button Content="Close" Click="Close_Click"/>
+    </StackPanel>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+      <StackPanel>
+        <TextBlock x:Name="Headline" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"/>
+        <TextBlock x:Name="Subhead" Style="{StaticResource Hint}" Margin="0,4,0,0"/>
+
+        <TextBlock Text="Scores" Style="{StaticResource SectionHeader}"/>
+        <TextBlock x:Name="Scores" TextWrapping="Wrap"/>
+
+        <TextBlock Text="What's limiting each point" Style="{StaticResource SectionHeader}"/>
+        <ItemsControl x:Name="VerdictList">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                <Border Width="14" Height="14" CornerRadius="2" Background="{Binding Swatch}" Margin="0,0,8,0"/>
+                <TextBlock Text="{Binding Text}" TextWrapping="Wrap" MaxWidth="820"/>
+              </StackPanel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <TextBlock Text="Channel ranking" Style="{StaticResource SectionHeader}"/>
+        <TextBlock x:Name="ChannelNote" Style="{StaticResource Hint}"/>
+        <DataGrid x:Name="ChannelGrid" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column"
+                  GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource RuleBrush}"
+                  BorderBrush="{StaticResource RuleBrush}" CanUserAddRows="False" MaxHeight="300">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="Band" Binding="{Binding Band}" Width="60"/>
+            <DataGridTextColumn Header="Channel" Binding="{Binding Channel}" Width="75"/>
+            <DataGridTextColumn Header="Score" Binding="{Binding Score, StringFormat=0.00}" Width="70"/>
+            <DataGridTextColumn Header="Other networks" Binding="{Binding WifiText}" Width="130"/>
+            <DataGridTextColumn Header="Busy" Binding="{Binding OccupancyText}" Width="80"/>
+            <DataGridTextColumn Header="Unexplained" Binding="{Binding ResidualText}" Width="110"/>
+            <DataGridTextColumn Header="Notes" Binding="{Binding Comment}" Width="*"/>
+          </DataGrid.Columns>
+        </DataGrid>
+
+        <TextBlock Text="Estimated source positions" Style="{StaticResource SectionHeader}"/>
+        <TextBlock x:Name="Estimates" TextWrapping="Wrap"/>
+
+        <TextBlock Text="Interference found" Style="{StaticResource SectionHeader}"/>
+        <TextBlock x:Name="Interference" TextWrapping="Wrap"/>
+
+        <TextBlock Text="How to read this" Style="{StaticResource SectionHeader}"/>
+        <TextBlock x:Name="Caveats" Style="{StaticResource Hint}"/>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- The Windows 10 SDK TFM gives access to Windows.Devices.Geolocation -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>WifiSurveyor</RootNamespace>
+    <AssemblyName>WifiSurveyor</AssemblyName>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WPF projects leave System.IO out of implicit usings (to avoid clashing with
+         System.Windows.Shapes.Path). Shapes is always aliased in this code, so it's safe to add. -->
+    <Using Include="System.IO" />
+    <!-- System.Threading also has a Barrier class, so point the bare name at ours -->
+    <Using Include="WifiSurveyor.Models.Barrier" Alias="Barrier" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WifiSurveyor.Core\WifiSurveyor.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ManagedNativeWifi" Version="2.*" />
+    <PackageReference Include="System.IO.Ports" Version="8.*" />
+    <PackageReference Include="System.Management" Version="8.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Optional: drop the IEEE OUI list here to get vendor names (see README) -->
+    <None Update="oui.csv" CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- Anything placed in tools\iperf3 is bundled; see tools\iperf3\README.txt for the licence notes -->
+    <None Include="..\..\tools\iperf3\**\*" Exclude="..\..\tools\iperf3\README.txt"
+          LinkBase="iperf3" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

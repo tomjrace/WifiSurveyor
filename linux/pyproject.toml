@@ -1,0 +1,27 @@
+[project]
+name = "wifisurveyor"
+version = "0.2.0"
+description = "Wi-Fi site surveys with heatmaps, spectrum analysis and 802.11 capture, for Linux"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Tom Race" }]
+requires-python = ">=3.10"
+dependencies = [
+    "PyGObject>=3.46",
+    "numpy>=1.24",
+    "pyserial>=3.5",
+    "scapy>=2.5",
+]
+
+[project.scripts]
+wifisurveyor = "wifisurveyor.__main__:main"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["wifisurveyor*"]
+
+[tool.setuptools.package-data]
+wifisurveyor = ["data/*", "data/hicolor/*/apps/*.png"]

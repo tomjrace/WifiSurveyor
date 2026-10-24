@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Wi-Fi Surveyor
+Comment=Wi-Fi site surveys with heatmaps, spectrum analysis and 802.11 capture
+Exec=wifisurveyor
+Icon=org.wifisurveyor.App
+Terminal=false
+Categories=Network;Monitor;Utility;
+Keywords=wifi;wireless;survey;heatmap;spectrum;802.11;

@@ -1,0 +1,134 @@
+<UserControl x:Class="WifiSurveyor.Views.CaptureView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <UserControl.Resources>
+    <Style x:Key="SectionExpander" TargetType="Expander">
+      <Setter Property="IsExpanded" Value="True"/>
+      <Setter Property="Margin" Value="0,0,0,10"/>
+      <Setter Property="Padding" Value="4,8,4,4"/>
+      <Setter Property="BorderBrush" Value="{StaticResource RuleBrush}"/>
+      <Setter Property="BorderThickness" Value="0,0,0,1"/>
+    </Style>
+    <Style x:Key="ExpanderTitle" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="{StaticResource InkBrush}"/>
+      <Setter Property="Margin" Value="4,4,0,4"/>
+    </Style>
+  </UserControl.Resources>
+
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                PanningMode="VerticalOnly">
+    <StackPanel Margin="14,10,14,20">
+
+      <!-- ============ Monitor mode ============ -->
+      <Expander Style="{StaticResource SectionExpander}">
+        <Expander.Header>
+          <TextBlock Text="Monitor mode" Style="{StaticResource ExpanderTitle}"/>
+        </Expander.Header>
+        <StackPanel>
+          <WrapPanel>
+            <TextBlock Text="Adapter" Style="{StaticResource Label}"/>
+            <ComboBox x:Name="WlanBox" Width="330" SelectionChanged="WlanBox_Changed"/>
+            <TextBlock Text="Channel" Style="{StaticResource Label}"/>
+            <TextBox x:Name="ChannelBox" Width="50"/>
+            <TextBlock x:Name="AdapterName" Style="{StaticResource Label}"/>
+          </WrapPanel>
+          <WrapPanel>
+            <Button x:Name="CheckMonitorButton" Content="Check this adapter" Click="CheckMonitor_Click"/>
+            <Button x:Name="PrepareButton" Content="Prepare and enable" Click="Prepare_Click"/>
+            <Button Content="Restore normal mode" Click="Restore_Click"/>
+            <Button x:Name="ElevateButton" Content="Restart as administrator" Click="Elevate_Click"/>
+          </WrapPanel>
+          <CheckBox x:Name="StopWindows" IsChecked="True"
+                    Content="Stop Windows scanning and reconnecting on this adapter while monitoring"/>
+          <CheckBox x:Name="PauseScans" IsChecked="True"
+                    Content="Keep this app's own scans off it"/>
+          <CheckBox x:Name="CloseTools"
+                    Content="Close other Wi-Fi tools that could interfere (asks first)"/>
+          <Border BorderBrush="{StaticResource RuleBrush}" BorderThickness="1" Margin="0,4,0,4">
+            <ItemsControl x:Name="CheckList" Margin="8,6">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="22"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding Mark}" Foreground="{Binding MarkBrush}" FontWeight="Bold"/>
+                    <StackPanel Grid.Column="1">
+                      <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                      <TextBlock Text="{Binding Detail}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"
+                                 Visibility="{Binding DetailVisibility}"/>
+                    </StackPanel>
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Border>
+          <TextBlock x:Name="Verdict" TextWrapping="Wrap" Margin="0,2,0,4"/>
+          <TextBox x:Name="MonitorLog" IsReadOnly="True" FontFamily="Consolas" FontSize="11"
+                   TextWrapping="Wrap" MinHeight="60" MaxHeight="160" VerticalScrollBarVisibility="Auto"
+                   BorderBrush="{StaticResource RuleBrush}" Background="{StaticResource PanelBrush}"/>
+        </StackPanel>
+      </Expander>
+
+      <!-- ============ Capture ============ -->
+      <Expander Style="{StaticResource SectionExpander}">
+        <Expander.Header>
+          <TextBlock Text="Capture" Style="{StaticResource ExpanderTitle}"/>
+        </Expander.Header>
+        <StackPanel>
+          <WrapPanel>
+            <TextBlock Text="Capture interface" Style="{StaticResource Label}"/>
+            <ComboBox x:Name="DeviceBox" Width="360"/>
+            <Button Content="Refresh" Click="Refresh_Click"/>
+          </WrapPanel>
+          <WrapPanel>
+            <TextBlock Text="Capture for" Style="{StaticResource Label}"/>
+            <TextBox x:Name="SecondsBox" Width="44" Text="10"/>
+            <TextBlock Text="seconds" Style="{StaticResource Label}"/>
+            <Button x:Name="CaptureButton" Content="Capture now" Click="Capture_Click" MinWidth="110"/>
+            <Button Content="Stop" Click="Stop_Click"/>
+            <Button Content="Open capture file…" Click="OpenFile_Click"/>
+            <Button x:Name="AttachButton" Content="Attach to selected survey point" Click="Attach_Click"
+                    ToolTip="Adds these figures to the point selected on the Survey tab, feeding the retry, airtime, and client maps"/>
+          </WrapPanel>
+          <TextBlock x:Name="CaptureStatus" Style="{StaticResource Hint}"/>
+          <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource RuleBrush}"
+                  BorderThickness="1" Padding="12,8" Margin="0,4,0,4">
+            <TextBlock x:Name="Summary" TextWrapping="Wrap" FontFamily="Consolas" FontSize="12"
+                       Text="Nothing captured yet."/>
+          </Border>
+        </StackPanel>
+      </Expander>
+
+      <!-- ============ Results ============ -->
+      <Expander Style="{StaticResource SectionExpander}">
+        <Expander.Header>
+          <TextBlock Text="Access points in the capture" Style="{StaticResource ExpanderTitle}"/>
+        </Expander.Header>
+        <DataGrid x:Name="BssGrid" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column"
+                  GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource RuleBrush}"
+                  BorderBrush="{StaticResource RuleBrush}" CanUserAddRows="False" RowHeight="26"
+                  MinHeight="120" MaxHeight="420">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="SSID" Binding="{Binding Ssid}" Width="*"/>
+            <DataGridTextColumn Header="BSSID" Binding="{Binding Bssid}" Width="130"/>
+            <DataGridTextColumn Header="Ch" Binding="{Binding Channel}" Width="45"/>
+            <DataGridTextColumn Header="Width" Binding="{Binding WidthMHz, StringFormat={}{0} MHz}" Width="70"/>
+            <DataGridTextColumn Header="Streams" Binding="{Binding Streams}" Width="65"/>
+            <DataGridTextColumn Header="Generation" Binding="{Binding Generation}" Width="120"/>
+            <DataGridTextColumn Header="Security" Binding="{Binding Security}" Width="150"/>
+            <DataGridTextColumn Header="Frames" Binding="{Binding Frames}" Width="70"/>
+            <DataGridTextColumn Header="Retries" Binding="{Binding RetryRate, StringFormat=P0}" Width="65"/>
+            <DataGridTextColumn Header="Airtime" Binding="{Binding AirtimeFraction, StringFormat=P1}" Width="70"/>
+            <DataGridTextColumn Header="Clients" Binding="{Binding Clients}" Width="60"/>
+            <DataGridTextColumn Header="AP reports busy" Binding="{Binding ReportedUtilization, StringFormat=P0}" Width="110"/>
+            <DataGridTextColumn Header="Signal" Binding="{Binding AvgRssi, StringFormat=0 dBm}" Width="70"/>
+          </DataGrid.Columns>
+        </DataGrid>
+      </Expander>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

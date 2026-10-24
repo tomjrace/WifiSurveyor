@@ -1,0 +1,152 @@
+<UserControl x:Class="WifiSurveyor.Views.ClientsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <UserControl.Resources>
+    <Style x:Key="SectionExpander" TargetType="Expander">
+      <Setter Property="IsExpanded" Value="True"/>
+      <Setter Property="Margin" Value="0,0,0,10"/>
+      <Setter Property="Padding" Value="4,8,4,4"/>
+      <Setter Property="BorderBrush" Value="{StaticResource RuleBrush}"/>
+      <Setter Property="BorderThickness" Value="0,0,0,1"/>
+    </Style>
+    <Style x:Key="ExpanderTitle" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="{StaticResource InkBrush}"/>
+      <Setter Property="Margin" Value="4,4,0,4"/>
+    </Style>
+  </UserControl.Resources>
+
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                PanningMode="VerticalOnly">
+    <StackPanel Margin="14,10,14,20">
+
+      <!-- ============ Adapters ============ -->
+      <Expander Style="{StaticResource SectionExpander}">
+        <Expander.Header>
+          <TextBlock Text="Adapters" Style="{StaticResource ExpanderTitle}"/>
+        </Expander.Header>
+        <StackPanel>
+          <WrapPanel>
+            <Button x:Name="WatchButton" Content="Start watching" Click="Watch_Click" MinWidth="120"/>
+            <Button Content="Refresh adapters" Click="Refresh_Click"/>
+            <TextBlock x:Name="WatchStatus" Style="{StaticResource Label}" Margin="10,0,0,6"/>
+          </WrapPanel>
+          <TextBlock Style="{StaticResource Hint}"
+                     Text="Tick the adapters to load-test. While watching, each is polled once a second and every drop, roam, and fall in negotiated rate goes into the link events below."/>
+          <DataGrid x:Name="ClientGrid" AutoGenerateColumns="False" HeadersVisibility="Column"
+                    GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource RuleBrush}"
+                    BorderBrush="{StaticResource RuleBrush}" CanUserAddRows="False" RowHeight="28"
+                    MaxHeight="260" Margin="0,4,0,4">
+            <DataGrid.Columns>
+              <DataGridCheckBoxColumn Header="Test" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="45"/>
+              <DataGridTextColumn Header="Adapter" Binding="{Binding Adapter}" Width="2*" IsReadOnly="True"/>
+              <DataGridTextColumn Header="State" Binding="{Binding State}" Width="90" IsReadOnly="True"/>
+              <DataGridTextColumn Header="SSID" Binding="{Binding Ssid}" Width="*" IsReadOnly="True"/>
+              <DataGridTextColumn Header="BSSID" Binding="{Binding Bssid}" Width="130" IsReadOnly="True"/>
+              <DataGridTextColumn Header="Band" Binding="{Binding Band}" Width="55" IsReadOnly="True"/>
+              <DataGridTextColumn Header="Signal (dBm)" Binding="{Binding Signal}" Width="90" IsReadOnly="True"/>
+              <DataGridTextColumn Header="TX (Mbps)" Binding="{Binding TxMbps, StringFormat=0}" Width="80" IsReadOnly="True"/>
+              <DataGridTextColumn Header="RX (Mbps)" Binding="{Binding RxMbps, StringFormat=0}" Width="80" IsReadOnly="True"/>
+              <DataGridTextColumn Header="Drops" Binding="{Binding Drops}" Width="55" IsReadOnly="True"/>
+              <DataGridTextColumn Header="Roams" Binding="{Binding Roams}" Width="60" IsReadOnly="True"/>
+              <DataGridTextColumn Header="Test server" Binding="{Binding Server}" Width="190" IsReadOnly="True"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </StackPanel>
+      </Expander>
+
+      <!-- ============ Servers ============ -->
+      <Expander Style="{StaticResource SectionExpander}">
+        <Expander.Header>
+          <TextBlock Text="Test servers" Style="{StaticResource ExpanderTitle}"/>
+        </Expander.Header>
+        <StackPanel>
+          <WrapPanel>
+            <ComboBox x:Name="PoolRegion" Width="150" SelectionChanged="PoolRegion_Changed"/>
+            <TextBox x:Name="PoolSearch" Width="150" TextChanged="PoolSearch_Changed"
+                     ToolTip="Filter by country, city, or provider"/>
+            <Button Content="Update list" Click="RefreshServers_Click"/>
+            <Button Content="Tick a few" Click="TickSome_Click"
+                    ToolTip="Ticks enough servers in the chosen region to give every adapter its own, plus spares"/>
+            <Button x:Name="CheckButton" Content="Check which are up" Click="CheckServers_Click"
+                    ToolTip="Tries to reach each ticked server, so dead ones are known before the test"/>
+            <CheckBox x:Name="UseLanServer" Content="Include the server from the Devices tab" IsChecked="True"/>
+          </WrapPanel>
+          <Border BorderBrush="{StaticResource RuleBrush}" BorderThickness="1" Height="190" Margin="0,2,0,6">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly">
+              <ItemsControl x:Name="ServerList" Margin="6,4">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                              Margin="0,0,0,4">
+                      <TextBlock>
+                        <Run Text="{Binding Label, Mode=OneWay}"/>
+                        <Run Text="{Binding StatusText, Mode=OneWay}" Foreground="{Binding StatusBrush, Mode=OneWay}"
+                             FontWeight="SemiBold"/>
+                      </TextBlock>
+                    </CheckBox>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Border>
+          <WrapPanel>
+            <Button Content="Give each adapter its own server" Click="Assign_Click"/>
+            <TextBlock x:Name="PoolInfo" Style="{StaticResource Label}"/>
+          </WrapPanel>
+          <TextBlock Style="{StaticResource Hint}"
+                     Text="Tick more servers than you have adapters: the spares are what a failed server falls back to. Each adapter still gets a different server, and one that's down or busy is skipped for the rest of the run."/>
+        </StackPanel>
+      </Expander>
+
+      <!-- ============ Run ============ -->
+      <Expander Style="{StaticResource SectionExpander}">
+        <Expander.Header>
+          <TextBlock Text="Run the load test" Style="{StaticResource ExpanderTitle}"/>
+        </Expander.Header>
+        <StackPanel>
+          <WrapPanel>
+            <TextBlock Text="Seconds per direction" Style="{StaticResource Label}"/>
+            <TextBox x:Name="LoadSeconds" Text="5" Width="44"/>
+            <Button x:Name="LoadButton" Content="Run on ticked adapters" Click="LoadTest_Click"/>
+            <Button Content="Cancel" Click="CancelLoad_Click"/>
+            <TextBlock x:Name="LoadStatus" Style="{StaticResource Label}" Margin="10,0,0,6"/>
+          </WrapPanel>
+          <TextBlock Style="{StaticResource Hint}"
+                     Text="Each adapter is bound to its own address and gets its own server, so they don't collide. On your own LAN, start one iperf3 server per adapter (iperf3 -s -p 5201, -p 5202, and so on). Small USB adapters cap out well below an access point's capacity, so read the total as how the cell holds up under several clients, not its maximum speed."/>
+          <Border BorderBrush="{StaticResource RuleBrush}" BorderThickness="1" Margin="0,6,0,0"
+                  Background="{StaticResource PanelBrush}">
+            <TextBox x:Name="LoadResults" IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                     FontFamily="Consolas" FontSize="12" TextWrapping="NoWrap" MinHeight="90" MaxHeight="300"
+                     Padding="8,6" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+          </Border>
+        </StackPanel>
+      </Expander>
+
+      <!-- ============ Events ============ -->
+      <Expander Style="{StaticResource SectionExpander}">
+        <Expander.Header>
+          <TextBlock Text="Link events" Style="{StaticResource ExpanderTitle}"/>
+        </Expander.Header>
+        <StackPanel>
+          <WrapPanel>
+            <Button Content="Clear log" Click="Clear_Click"/>
+            <Button Content="Export log…" Click="Export_Click"/>
+          </WrapPanel>
+          <DataGrid x:Name="EventGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                    HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                    HorizontalGridLinesBrush="{StaticResource RuleBrush}" BorderBrush="{StaticResource RuleBrush}"
+                    CanUserAddRows="False" RowHeight="24" MinHeight="120" MaxHeight="360">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Time" Binding="{Binding Time, StringFormat=HH:mm:ss}" Width="80"/>
+              <DataGridTextColumn Header="Event" Binding="{Binding KindText}" Width="110"/>
+              <DataGridTextColumn Header="Adapter" Binding="{Binding Adapter}" Width="2*"/>
+              <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="3*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </StackPanel>
+      </Expander>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>WifiSurveyor</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WPF leaves System.IO out of implicit usings, so both sides declare it the same way -->
+    <Using Include="System.IO" />
+    <Using Include="WifiSurveyor.Models.Barrier" Alias="Barrier" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.IO.Ports" Version="8.*" />
+  </ItemGroup>
+
+</Project>

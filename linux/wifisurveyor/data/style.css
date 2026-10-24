@@ -1,0 +1,110 @@
+/*
+ * Touch sizing. The target device is a small, dense panel (about 8 logical pixels per
+ * millimetre), so stock controls come out 3-4 mm tall. These bring every tappable thing up to
+ * roughly 6 mm without making the window any wider than it has to be.
+ */
+
+window.touch button,
+window.touch menubutton > button,
+window.touch dropdown > button,
+window.touch togglebutton {
+  min-height: 44px;
+  min-width: 44px;
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+window.touch button.image-button,
+window.touch menubutton.image-button > button {
+  padding-left: 0;
+  padding-right: 0;
+  min-width: 48px;
+}
+
+window.touch spinbutton {
+  min-height: 44px;
+}
+
+window.touch spinbutton > button {
+  min-width: 44px;
+}
+
+window.touch switch {
+  min-height: 30px;
+}
+
+window.touch switch > slider {
+  min-width: 30px;
+  min-height: 30px;
+}
+
+window.touch popover modelbutton,
+window.touch popover listview > row {
+  min-height: 44px;
+}
+
+window.touch columnview > listview > row {
+  min-height: 40px;
+}
+
+window.touch row.combo,
+window.touch row.spin,
+window.touch row.action {
+  min-height: 56px;
+}
+
+window.touch headerbar {
+  min-height: 56px;
+}
+
+/* The status line floats over the bottom of the map instead of taking a row of its own */
+.map-status {
+  padding: 8px 14px;
+  border-radius: 999px;
+}
+
+/* The feet box for the scale line: big enough to hit with a finger */
+.scale-bar {
+  padding: 10px 14px;
+  border-radius: 14px;
+}
+
+.scale-bar spinbutton {
+  min-height: 48px;
+  font-size: 1.3em;
+}
+
+.scale-bar button {
+  min-height: 48px;
+  padding: 0 18px;
+}
+
+.map-menu {
+  padding: 6px;
+}
+
+.gesture-help label.key {
+  font-weight: bold;
+}
+
+/* Checkbox lists (bands and ranges): rows tall enough for a finger, boxes big enough to see */
+window.touch .check-list checkbutton {
+  min-height: 40px;
+  padding: 2px 6px;
+}
+
+window.touch .check-list checkbutton > check {
+  min-width: 22px;
+  min-height: 22px;
+}
+
+window.touch .check-list checkbutton.check-all {
+  font-weight: bold;
+}
+
+/* A graded table cell (good, fair, poor) is bold as well as coloured, so it reads at a glance */
+columnview.data-table label.success,
+columnview.data-table label.warning,
+columnview.data-table label.error {
+  font-weight: bold;
+}

@@ -1,0 +1,16 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="WifiSurveyor.Gui.App"
+             RequestedThemeVariant="Light">
+  <Application.Styles>
+    <FluentTheme/>
+  </Application.Styles>
+
+  <Application.Resources>
+    <SolidColorBrush x:Key="AccentBrush" Color="#1D4ED8"/>
+    <SolidColorBrush x:Key="PanelBrush" Color="#F3F5F8"/>
+    <SolidColorBrush x:Key="RuleBrush" Color="#D9DEE5"/>
+    <SolidColorBrush x:Key="InkBrush" Color="#1E293B"/>
+    <SolidColorBrush x:Key="MutedBrush" Color="#5B6778"/>
+  </Application.Resources>
+</Application>

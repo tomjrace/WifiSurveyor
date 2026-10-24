@@ -1,0 +1,103 @@
+<UserControl x:Class="WifiSurveyor.Views.SetupView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ScrollViewer VerticalScrollBarVisibility="Auto">
+    <StackPanel Margin="20,8,20,20" MaxWidth="900" HorizontalAlignment="Left">
+
+      <TextBlock Text="Wi-Fi Surveyor" FontSize="22" FontWeight="SemiBold"/>
+      <TextBlock x:Name="VersionText" Style="{StaticResource Hint}"/>
+
+      <TextBlock Text="What's installed" Style="{StaticResource SectionHeader}"/>
+      <WrapPanel>
+        <Button x:Name="CheckButton" Content="Check again" Click="Check_Click"/>
+        <Button x:Name="FixAllButton" Content="Install what's missing" Click="FixAll_Click"/>
+        <TextBlock x:Name="SummaryText" Style="{StaticResource Label}" Margin="10,0,0,6"/>
+      </WrapPanel>
+
+      <ItemsControl x:Name="StatusList">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Border BorderBrush="{StaticResource RuleBrush}" BorderThickness="0,0,0,1" Padding="0,7">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="14"/>
+                  <ColumnDefinition Width="230"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Ellipse Width="10" Height="10" Fill="{Binding Dot}" VerticalAlignment="Top" Margin="0,4,0,0"/>
+                <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap"
+                           Margin="6,0,10,0"/>
+                <TextBlock Grid.Column="2" Text="{Binding Detail}" TextWrapping="Wrap"
+                           Foreground="{StaticResource MutedBrush}"/>
+                <Button Grid.Column="3" Content="{Binding ActionLabel}" Click="Action_Click"
+                        Visibility="{Binding ActionVisibility}" MinWidth="140" VerticalAlignment="Top"/>
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <TextBlock Text="Automatic installs" Style="{StaticResource SectionHeader}"/>
+      <TextBlock Style="{StaticResource Hint}"
+                 Text="Ticking the box lets this page install the components below through the Windows Package Manager, using each vendor's own unattended switches. You are agreeing to their licences, so read them first; the links are in the list above and the licence section below."/>
+      <CheckBox x:Name="ConsentBox" Click="Consent_Changed" Margin="0,4,0,6">
+        <TextBlock TextWrapping="Wrap" MaxWidth="820"
+                   Text="I have read the licences for the components I'm installing and accept them. Install them for me where that can be done unattended."/>
+      </CheckBox>
+      <TextBlock Style="{StaticResource Hint}"
+                 Text="Two things this page will not do. It won't click through a vendor's own licence screen for you: an agreement you haven't seen isn't an agreement, so where a vendor has no unattended installer, the button opens their page and you click through it yourself. And it won't restart your machine on its own; if a driver needs one, the restart row offers it and gives you a minute to cancel."/>
+
+      <TextBlock Text="Progress" Style="{StaticResource SectionHeader}"/>
+      <Border BorderBrush="{StaticResource RuleBrush}" BorderThickness="1" Height="150">
+        <TextBox x:Name="LogText" IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                 FontFamily="Consolas" FontSize="11" TextWrapping="Wrap"
+                 VerticalScrollBarVisibility="Auto"/>
+      </Border>
+
+      <TextBlock Text="Notes on the hardware" Style="{StaticResource SectionHeader}"/>
+      <TextBlock Style="{StaticResource Hint}"
+                 Text="Both Alfa adapters use MediaTek chipsets (MT7612U in the AWUS036ACM, MT7921AU in the AWUS036AXML). Windows Update often supplies the MT7612U driver on its own, so for the ACM, plug it in, wait a moment, then press Check again. Windows has no driver for the AXML, so its row downloads Alfa's own Wi-Fi and Bluetooth installers and starts each one in turn. Work through their windows as usual, including the administrator prompt; the app waits for one to close before starting the next, and tells you afterwards whether Windows sees a working driver. Neither adapter needs anything from Asus; that name belongs to a different manufacturer."/>
+      <TextBlock Style="{StaticResource Hint}"
+                 Text="The RF Explorer needs the Silicon Labs CP210x USB-to-UART driver, and a COM port appearing when you plug it in means it's already there. Most USB GPS dongles are handled by drivers Windows already has."/>
+
+      <TextBlock Text="Licences" Style="{StaticResource SectionHeader}"/>
+      <TextBlock x:Name="BundledText" TextWrapping="Wrap"/>
+      <TextBlock TextWrapping="Wrap" Margin="0,8,0,0">
+        <Run FontWeight="SemiBold" Text="Npcap"/>
+        <Run Text=" — proprietary, from the Nmap Project. Used only if you install it; its free licence forbids redistribution, so this application never ships or silently installs it, and its installer is interactive by design. Capture files made elsewhere give the same analysis."/>
+      </TextBlock>
+      <TextBlock TextWrapping="Wrap" Margin="0,6,0,0">
+        <Run FontWeight="SemiBold" Text="Silicon Labs CP210x driver"/><Run Text=" and "/>
+        <Run FontWeight="SemiBold" Text="MediaTek adapter drivers"/>
+        <Run Text=" — vendor licences, downloaded from the vendor and accepted by you."/>
+      </TextBlock>
+      <TextBlock TextWrapping="Wrap" Margin="0,6,0,0">
+        <Run FontWeight="SemiBold" Text="ManagedNativeWifi"/><Run Text=" (MIT), "/>
+        <Run FontWeight="SemiBold" Text="System.IO.Ports"/><Run Text=" and "/>
+        <Run FontWeight="SemiBold" Text="System.Management"/>
+        <Run Text=" (MIT, .NET Foundation) — linked into this application."/>
+      </TextBlock>
+      <TextBlock TextWrapping="Wrap" Margin="0,6,0,0">
+        <Run FontWeight="SemiBold" Text="Public iperf3 server list"/>
+        <Run Text=" (MIT, iperf3serverlist.net) and the "/>
+        <Run FontWeight="SemiBold" Text="IEEE OUI registry"/>
+        <Run Text=" — data only, fetched at your request."/>
+      </TextBlock>
+
+      <TextBlock x:Name="LicenseHeader" Style="{StaticResource Hint}" Margin="0,10,0,4"/>
+      <Border BorderBrush="{StaticResource RuleBrush}" BorderThickness="1" Padding="10"
+              Background="{StaticResource PanelBrush}">
+        <TextBox x:Name="LicenseText" IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                 FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" MaxHeight="200"
+                 VerticalScrollBarVisibility="Auto"/>
+      </Border>
+
+      <WrapPanel Margin="0,10,0,0">
+        <Button Content="Open the notices file" Click="OpenNotices_Click"/>
+        <Button Content="Open the program folder" Click="OpenFolder_Click"/>
+        <Button Content="Open the data folder" Click="OpenData_Click"/>
+      </WrapPanel>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>
