@@ -1,6 +1,6 @@
 # Wi-Fi Surveyor
 
-Wi-Fi Surveyor walks a building, measures the wireless, and writes a map and a report. Tom Race wrote it. It is [MIT licensed](LICENSE): you can use it, change it, and ship it, and it comes with no warranty.
+Wi-Fi Surveyor walks a building, measures the wireless, and writes a map and a report. Tom Race and AI tools vibe coded it. It is [MIT licensed](LICENSE): you can use it, change it, and ship it, and it comes with no warranty.
 
 **Linux** (`linux/`) is the application to use. It is a GTK4 program: heatmaps, RF Explorer and tinySA spectrum analysis, HackRF, RTL-SDR, 802.11 capture, and GPS. Install and use it from [linux/README.md](linux/README.md).
 
