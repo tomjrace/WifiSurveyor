@@ -17,10 +17,18 @@ contact and exactly what that service receives.
 ## Installing
 
 ```
-sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 iw iproute2 libpcap0.8
-pip install --user .
-wifisurveyor
+sudo apt install git python3-venv python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 \
+    iw iproute2 libpcap0.8
+git clone https://github.com/tomjrace/WifiSurveyor.git
+cd WifiSurveyor/WifiSurveyor-Linux
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -e .
+.venv/bin/wifisurveyor
 ```
+
+The virtual environment keeps the app's Python packages apart from the system's (current
+Ubuntu refuses `pip install --user`), and `--system-site-packages` lets it use the GTK
+bindings apt installed.
 
 Fedora: `sudo dnf install python3-gobject gtk4 libadwaita iw iproute libpcap`.
 Arch: `sudo pacman -S python-gobject gtk4 libadwaita iw iproute2 libpcap`.
@@ -36,8 +44,11 @@ the status line says so when a measurement is estimated. For true dBm, and for m
 and capture, run as root, or use **Relaunch as root** in the menu (it asks you to save first):
 
 ```
-pkexec wifisurveyor        # or: sudo -E wifisurveyor
+sudo env WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY .venv/bin/wifisurveyor
 ```
+
+(`sudo` drops the variables that say where the desktop's display is, so it's passed on
+explicitly; *Relaunch as root* does the same.)
 
 ### The spectrum analyzer: RF Explorer or tinySA
 
@@ -621,20 +632,50 @@ SSID on an access point usually has a made-up (locally administered) BSSID; its 
 found from the real address it was made from and marked "virtual BSSID". A phone or laptop
 using a private address shows as "Private address".
 
-**Monitor** watches one network on one access point for as long as you leave it, for the
-network that drops every client now and then and nobody can say why. It's drawn like a
-patient monitor: a heartbeat per check (flat and red while it's down), a pulse for the share of
-the access point's beacons arriving, how busy the channel is, and the vital signs beside them:
-internet round trip, signal, channel airtime, the access point's uptime, availability and
-incidents. Below are the channel as the analyzer sees it (only that channel, swept fast, with a
-waterfall), the whole session as a green, amber and red strip, and every incident.
+**Watch** stays with one network's access point for as long as you leave it, for the network
+that drops every client now and then and nobody can say why. Choose it from the start screen
+(*Watch a network*) or the Watch tab. It's drawn like a patient monitor, in four lanes: a
+heartbeat per check (taller for a quicker internet reply, flat and red while it's down), a pulse
+for the share of the access point's beacons arriving, how busy the channel is, and how loaded
+the access point is. Beside them are the vital signs: internet round trip, signal, channel, clients,
+link rate, the access point's uptime, availability and incidents. Below are the channel as the
+analyzer sees it (only that channel, swept fast, with a waterfall), the whole session as a
+strip, and every incident with its most likely cause.
+
+**Both bands at once.** When the network's SSID is on 2.4 GHz and 5 GHz, a second row offers to
+watch the other band too, with adapters of its own, picked for you: an adapter that only does
+2.4 GHz joins there, leaving one that does both for 5 GHz, and the best monitor-mode adapter
+listens. Any of them can be changed. While both run, the 5 GHz traces sit under the 2.4 GHz ones
+on one time axis (dragging, zooming or tapping either moves both), their spectrum views sit side
+by side, the session strip has a row per band, and the incidents of both are in one list, each
+tagged with its band. When both drop within a minute of each other, the list says to look past the
+radios (the access point itself, its power, the line behind it); when only one does, that radio,
+its channel or its clients. One spectrum analyzer takes turns between the two channels.
+
+**Colours mean what a user would notice.** Red is down, amber is slow (the gateway or internet
+taking over 250 ms). Beacons missed while everything still works are drawn lower, not red: a
+client saving power skips some, and nobody using the network notices. The beacon trace turns red
+only when the Wi-Fi link itself failed with them. Tap any moment for the numbers behind it.
 
 An adapter joins the access point, and only that one: it isn't allowed to roam, and
 NetworkManager isn't allowed to move it to another network while this one is down. Every
 check (1, 2 or 5 s apart) asks whether it's still associated and how many beacons arrived,
 pings the gateway and the internet (three public DNS resolvers, by address, so DNS trouble
-can't look like an outage), and every few checks looks up a name through each of the network's
-DNS servers. Two failed checks in a row, or the link dropping, is an incident.
+can't look like an outage), reads the link's transmit and receive rates and resends, and every
+few checks looks up a name through each of the network's DNS servers. Two failed checks in a
+row, or the link dropping, is an incident. One lost ping to the gateway isn't: it takes two.
+
+**The access point's load.** Many access points say in their beacons how many clients they
+have and how busy they find the channel (the BSS Load element); a monitor adapter reads it, and
+the AP LOAD lane and the CLIENTS tile show it. Without it, the lane counts the clients the
+monitor adapter heard in the last five minutes. The monitor adapter also counts the share of the
+access point's frames sent twice (a crowded or noisy channel) and the other networks on the
+channel.
+
+**The channel's busy figure** is the share of single measurements (one frequency, one moment)
+well above the noise floor, not the share of sweeps: a tinySA takes about two seconds over a
+channel, so every sweep catches a beacon somewhere and would read 100%. An analyzer is less
+sensitive than an access point's radio, so expect its figure below the access point's own.
 
 Each incident gets the evidence that tells its causes apart, and is listed with the most likely
 one, how sure that is, why, what to do about it, what else it could be, and what evidence would
@@ -650,34 +691,43 @@ have made it surer:
 | It changed channel | A channel switch announced in its beacons, or it comes back on another channel (radar on a DFS channel) |
 | Interference | The analyzer sees the channel flooded while beacons are lost |
 | Only this adapter | The access point kept beaconing and nobody else was disconnected |
+| This computer's adapter dropped out | The adapter itself fell off USB and came back (it reappears as a new interface): not the network, and not counted against its availability |
 | Upstream, gateway, DHCP or DNS | Still connected, and the checks say which stage stopped answering |
 
 The evidence comes from up to three places, and the page says which you have and what's
 missing:
 
 - **The joined adapter** (always): the kernel's reason for each disconnect, whether the access
-  point sent it, forged deauthentications rejected under protected management frames, and the
-  beacon counters. While the link is down it scans for the access point and the unit's other
-  radios (found from their BSSIDs) and reads their clocks, which shows a restart. As root,
-  that is; NetworkManager's scans don't report the clock.
+  point sent it, forged deauthentications rejected under protected management frames, the
+  beacon counters, and the link rates. While the link is down it scans for the access point and
+  the unit's other radios (found from their BSSIDs) and reads their clocks, which shows a
+  restart. As root, that is; NetworkManager's scans don't report the clock.
 - **A second adapter in monitor mode** (needs root): parked on the access point's channel, it
   hears every beacon and every deauthentication, from anyone to anyone. This is what tells a
   forged deauthentication from a real one and a silent access point from a lost client. The
   frames from 30 seconds before each incident to its end are saved as a `.pcap` beside the
-  session, to open on the Capture page or in Wireshark.
+  session, to open on the Capture page or in Wireshark. Some drivers (the Alfa AWUS036ACM's
+  MT7612U after working on 5 GHz) go deaf in monitor mode on 2.4 GHz; if it hears nothing at
+  all, the page listens through a fresh monitor interface on the same radio instead.
 - **A spectrum analyzer** (a tinySA or RF Explorer): parked on the channel's full width, it shows
   whether the channel went quiet or was flooded.
 
-**Worth fixing, outage or not** lists what turns up between incidents: a DNS server that fails
-lookups, forged deauthentications rejected, and beacon loss while connected. The incidents
-list also says what they have in common: a regular interval, a time of day, or a radio that
-restarts after the same uptime each time.
+Several adapters on one network each have an address on the same subnet, and Linux lets any of
+them answer for any of the computer's addresses, so the gateway can send one adapter's replies
+to another. While watching, each adapter answers only for its own address (`arp_ignore 1`,
+`arp_announce 2`), and the previous settings are put back afterwards.
 
-Each session is written as it goes to its own folder under
+**Worth fixing, outage or not** lists what turns up between incidents: a DNS server that fails
+lookups, forged deauthentications rejected, beacon loss while connected, and an adapter that
+keeps dropping off USB. The incidents list also says what they have in common: a regular
+interval, a time of day, or a radio that restarts after the same uptime each time.
+
+Each session, one per band, is written as it goes to its own folder under
 `~/.local/share/wifisurveyor/monitor/`: `session.jsonl` with every check and incident, and the
-incident captures. **Export incidents…** saves them as a spreadsheet. While a session runs, its
-adapters are left alone by the other pages, and closing the app asks first. The machine
-mustn't sleep meanwhile: turn off automatic suspend in GNOME's power settings for a long watch.
+incident captures. **Export incidents…** saves them as a spreadsheet, every band in one file.
+While a session runs, its adapters are left alone by the other pages, and closing the app asks
+first. The machine mustn't sleep meanwhile: turn off automatic suspend in GNOME's power settings
+for a long watch.
 
 **Spectrum** draws the live trace and peak hold from the analyzer with Wi-Fi channels
 marked. **All Wi-Fi bands (US)**, the default, goes round every US Wi-Fi range in turn and shows
