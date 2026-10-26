@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 from wifisurveyor.core import analysis
-from wifisurveyor.core.project import Point, Project
+from wifisurveyor.core.project import Point, Project, Wall
 from wifisurveyor.net import wifi
 from wifisurveyor.rf import explorer
 
@@ -55,6 +55,57 @@ class ApSiteTests(unittest.TestCase):
         ]) for x, y in grid_points()]
         project = Project(width=1000, height=800, meters_per_pixel=MPP, points=points)
         self.assertEqual(analysis.ap_sites(project, band="5")[0]["networks"], [("Office", ["5"])])
+
+    def test_ssids_on_one_radio_count_once_towards_the_limit(self) -> None:
+        here, there = (300.0, 250.0), (850.0, 650.0)
+        points = [Point(x, y, networks=[
+            network(path_loss(x, y, here), "AA:00:00:00:00:01"),
+            network(path_loss(x, y, here) + 1, "AA:00:00:40:00:01", ssid="Guest"),
+            network(path_loss(x, y, there), "CC:00:00:00:00:01", ssid="Lab", channel=6, freq=2437),
+        ]) for x, y in grid_points()]
+        project = Project(width=1000, height=800, meters_per_pixel=MPP, points=points)
+
+        sites = analysis.ap_sites(project, limit=2)
+
+        self.assertEqual(len(sites), 2)
+        office = next(s for s in sites if s["networks"][0][0] == "Guest")
+        self.assertEqual(office["networks"], [("Guest", ["2.4"]), ("Office", ["2.4"])])
+        self.assertEqual(sorted(office["bssids"]), ["AA:00:00:00:00:01", "AA:00:00:40:00:01"])
+
+    def test_neighbouring_addresses_in_different_places_stay_apart(self) -> None:
+        # Two access points out of one box: consecutive addresses, one channel, but each reads
+        # loudest where it is, so they're two radios.
+        here, there = (300.0, 250.0), (850.0, 650.0)
+        heard = {}
+        points = []
+        for index, (x, y) in enumerate(grid_points()):
+            heard.setdefault("AA:00:00:00:00:01", {})[index] = path_loss(x, y, here)
+            heard.setdefault("AA:00:00:00:00:02", {})[index] = path_loss(x, y, there)
+            points.append(Point(x, y, networks=[
+                network(path_loss(x, y, here), "AA:00:00:00:00:01"),
+                network(path_loss(x, y, there), "AA:00:00:00:00:02", ssid="Guest")]))
+        channels = {"AA:00:00:00:00:01": 1, "AA:00:00:00:00:02": 1}
+        self.assertFalse(analysis.same_radio("AA:00:00:00:00:01", "AA:00:00:00:00:02",
+                                             heard, channels))
+        project = Project(width=1000, height=800, meters_per_pixel=MPP, points=points)
+        self.assertEqual(len(analysis.ap_sites(project, limit=1)), 1)
+
+    def test_one_radio_needs_the_same_channel(self) -> None:
+        levels = {0: -40.0, 1: -60.0, 2: -70.0}
+        heard = {"00:00:00:00:00:01": levels, "00:00:00:40:00:01": dict(levels)}
+        self.assertTrue(analysis.same_radio(*heard, heard, dict.fromkeys(heard, 36)))
+        self.assertFalse(analysis.same_radio(*heard, heard, {"00:00:00:00:00:01": 36,
+                                                             "00:00:00:40:00:01": 40}))
+
+    def test_walls_shared_between_access_points_give_the_same_fit(self) -> None:
+        here = (300.0, 250.0)
+        walls = [Wall(500, 0, 500, 800, db=8), Wall(0, 400, 1000, 400, db=5)]
+        points = [Point(x, y, networks=[network(path_loss(x, y, here), "AA:00:00:00:00:01")])
+                  for x, y in grid_points()]
+        project = Project(width=1000, height=800, meters_per_pixel=MPP, points=points, walls=walls)
+        site = analysis.ap_sites(project)[0]
+        alone = analysis.locate(project, analysis.ap_samples(project, "AA:00:00:00:00:01"))
+        self.assertEqual((site["x"], site["y"]), (alone["x"], alone["y"]))
 
 
 def segment_with(points_levels: dict[float, float], floor: float = -100.0) -> dict:

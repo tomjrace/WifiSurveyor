@@ -374,10 +374,24 @@ def wall_loss(project, x1, y1, x2, y2) -> float:
     return total
 
 
-def locate(project, samples: list[tuple[float, float, float]], grid: int = 64):
+SEARCH_GRID = 64
+
+
+def search_grid(project, grid: int = SEARCH_GRID):
+    """The candidate positions locate tries: the plan and a tenth beyond each edge."""
+    gx = np.linspace(-0.1 * project.width, 1.1 * project.width, grid)
+    gy = np.linspace(-0.1 * project.height, 1.1 * project.height, grid)
+    cx, cy = np.meshgrid(gx, gy)
+    return gx, gy, cx, cy
+
+
+def locate(project, samples: list[tuple[float, float, float]], grid: int = SEARCH_GRID,
+           walls: np.ndarray | None = None):
     """
     Fits received = P0 - 10 n log10(distance) - walls over a grid of positions and
     exponents, solving P0 in closed form at each. Returns position, spread, and fit.
+    ``walls`` is grid_wall_loss for these samples over search_grid, when the caller already
+    has it: it's most of the work, and the same for every access point heard at a point.
     """
     if len(samples) < 4:
         return None
@@ -388,14 +402,13 @@ def locate(project, samples: list[tuple[float, float, float]], grid: int = 64):
         return None
 
     mpp = project.meters_per_pixel or 0.05
-    gx = np.linspace(-0.1 * project.width, 1.1 * project.width, grid)
-    gy = np.linspace(-0.1 * project.height, 1.1 * project.height, grid)
-    cx, cy = np.meshgrid(gx, gy)
+    gx, gy, cx, cy = search_grid(project, grid)
 
     distance = np.sqrt((cx[..., None] - xs) ** 2 + (cy[..., None] - ys) ** 2) * mpp
     log_distance = 10 * np.log10(np.maximum(distance, 0.5))
 
-    walls = grid_wall_loss(project.walls, xs, ys, cx, cy)
+    if walls is None:
+        walls = grid_wall_loss(project.walls, xs, ys, cx, cy)
 
     best = None
     for exponent in np.arange(2.0, 4.01, 0.25):
@@ -474,30 +487,101 @@ def _crosses(ax, ay, bx, by, cx, cy, dx, dy) -> bool:
 
 BAND_ORDER = {"2.4": 0, "5": 1, "6": 2}
 
+# One radio carrying several SSIDs: how far apart its BSSIDs may be, in address bits, and how
+# closely their levels must agree on average where both were heard.
+SAME_RADIO_BITS = 4
+SAME_RADIO_DB = 3.0
 
-def ap_sites(project, ssid: str | None = None, band: str = "All", limit: int = 12) -> list[dict]:
+
+def same_radio(a: str, b: str, heard: dict[str, dict[int, float]], channels: dict) -> bool:
     """
-    Locates the most-measured BSSIDs, then gathers those that land together into one site,
+    Whether two BSSIDs are one radio sending two SSIDs. Only when everything agrees: the same
+    channel, addresses a few bits apart (how vendors number a radio's extra BSSIDs), heard
+    together at nearly every point either was, and levels that match point by point while
+    varying enough across the plan for that to mean something. Two access points out of one
+    box can have neighbouring addresses and share a channel, but not read the same everywhere.
+    """
+    if channels.get(a) is None or channels.get(a) != channels.get(b):
+        return False
+    try:
+        bits = bin(int(a.replace(":", ""), 16) ^ int(b.replace(":", ""), 16)).count("1")
+    except ValueError:
+        return False
+    if bits > SAME_RADIO_BITS:
+        return False
+    common = sorted(heard[a].keys() & heard[b].keys())
+    if len(common) < 3 or len(common) < 0.75 * len(heard[a].keys() | heard[b].keys()):
+        return False
+    first = np.array([heard[a][i] for i in common])
+    second = np.array([heard[b][i] for i in common])
+    return (np.abs(first - second).mean() <= SAME_RADIO_DB
+            and first.max() - first.min() >= 6)
+
+
+def ap_sites(project, ssid: str | None = None, band: str = "All", limit: int = 24) -> list[dict]:
+    """
+    Locates the most-measured radios, then gathers those that land together into one site,
     since one access point usually carries several: a radio per band, and often more than
-    one SSID on each. Each site lists the SSIDs heard from it and on which bands.
+    one SSID on each. BSSIDs that are surely one radio are located together and count once
+    towards ``limit``. Each site lists the SSIDs heard from it and on which bands.
     """
-    seen: dict[str, list] = {}
-    for point in project.points:
+    seen: dict[str, tuple[str, str]] = {}
+    heard: dict[str, dict[int, float]] = {}
+    channels: dict[str, object] = {}
+    for index, point in enumerate(project.points):
         for network in point.networks:
             if (ssid and network["ssid"] != ssid) or (band != "All" and network.get("band") != band):
                 continue
-            entry = seen.setdefault(network["bssid"], [network["ssid"], network.get("band", ""), 0])
-            entry[2] += 1
-    ranked = sorted(seen.items(), key=lambda item: item[1][2], reverse=True)
+            bssid = network["bssid"]
+            seen.setdefault(bssid, (network["ssid"], network.get("band", "")))
+            channels.setdefault(bssid, network.get("channel"))
+            heard.setdefault(bssid, {}).setdefault(index, float(network["rssi"]))
+    ranked = sorted(seen, key=lambda bssid: len(heard[bssid]), reverse=True)
 
-    located = []
-    for bssid, (name, radio_band, count) in ranked:
-        if count < 4 or len(located) >= limit:
+    radios: list[list[str]] = []
+    grouped: set[str] = set()
+    for leader in ranked:
+        if leader in grouped:
             continue
-        found = locate(project, ap_samples(project, bssid))
+        radio = [leader] + [other for other in ranked
+                            if other not in grouped and other != leader
+                            and same_radio(leader, other, heard, channels)]
+        grouped.update(radio)
+        radios.append(radio)
+
+    def levels(radio: list[str]) -> dict[int, float]:
+        by_point: dict[int, list[float]] = {}
+        for bssid in radio:
+            for index, level in heard[bssid].items():
+                by_point.setdefault(index, []).append(level)
+        return {index: sum(found) / len(found) for index, found in by_point.items()}
+
+    def add(radio: list[str], found: dict) -> None:
+        for bssid in radio:
+            name, radio_band = seen[bssid]
+            located.append((name, radio_band, dict(found, bssid=bssid)))
+
+    _gx, _gy, cx, cy = search_grid(project)
+    walls_everywhere = None
+    located = []
+    placed: set[str] = set()
+    count = 0
+    for radio in radios:
+        heard_at = levels(radio)
+        if count >= limit or len(heard_at) < 4:
+            continue
+        indices = sorted(heard_at)
+        if project.walls and walls_everywhere is None:
+            walls_everywhere = grid_wall_loss(
+                project.walls, np.array([p.x for p in project.points]),
+                np.array([p.y for p in project.points]), cx, cy)
+        found = locate(project, [(project.points[i].x, project.points[i].y, heard_at[i])
+                                 for i in indices],
+                       walls=None if walls_everywhere is None else walls_everywhere[..., indices])
         if found:
-            located.append((name, radio_band, found))
-            found["bssid"] = bssid
+            add(radio, found)
+            placed.update(radio)
+            count += 1
 
     mpp = project.meters_per_pixel
     near = 3.0 / mpp if mpp else 0.04 * float(np.hypot(project.width, project.height))
@@ -505,18 +589,20 @@ def ap_sites(project, ssid: str | None = None, band: str = "All", limit: int = 1
     # Heard at too few points to locate: a rough guess beside the point where it was strongest,
     # so it can still be named and moved to where it really is. Without a chosen network, only
     # the strong ones, which are probably close by; the rest would just be clutter.
-    placed = {found["bssid"] for _name, _band, found in located}
-    for bssid, (name, radio_band, count) in ranked:
-        if bssid in placed or len(located) >= limit:
+    for radio in radios:
+        if radio[0] in placed or count >= limit:
             continue
-        samples = ap_samples(project, bssid)
-        x, y, level = max(samples, key=lambda sample: sample[2])
+        heard_at = levels(radio)
+        index = max(heard_at, key=heard_at.get)
+        level = heard_at[index]
         if ssid is None and level < -60:
             continue
-        located.append((name, radio_band, {
+        x, y = project.points[index].x, project.points[index].y
+        add(radio, {
             "x": min(project.width, x + near * 0.6), "y": y, "radius": near, "rough": True,
-            "outside": False, "rms": 99.0, "p0": level, "exponent": 3.0, "points": count,
-            "bssid": bssid, "guess": True}))
+            "outside": False, "rms": 99.0, "p0": level, "exponent": 3.0, "points": len(heard_at),
+            "guess": True})
+        count += 1
     sites: list[dict] = []
     for name, radio_band, found in sorted(located, key=lambda item: item[2]["rms"]):
         site = next((s for s in sites
