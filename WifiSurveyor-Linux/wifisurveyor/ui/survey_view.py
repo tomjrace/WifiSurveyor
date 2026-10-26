@@ -385,6 +385,9 @@ class SurveyView(Gtk.Box):
         self.scale_mode.connect("toggled", self._scale_toggled)
         undo = Gtk.Button(child=Adw.ButtonContent(icon_name="edit-undo-symbolic", label="Undo"))
         undo.connect("clicked", self.undo)
+        redraw = Gtk.Button(child=Adw.ButtonContent(icon_name="view-refresh-symbolic", label="Redraw"),
+                            tooltip_text="Work the map and the access points out again")
+        redraw.connect("clicked", lambda *_: self.redraw_heatmap())
 
         zoom_out = Gtk.Button(icon_name="zoom-out-symbolic", tooltip_text="Zoom out")
         zoom_out.connect("clicked", lambda *_: self.set_scale(self.scale / 1.5))
@@ -431,7 +434,7 @@ class SurveyView(Gtk.Box):
                                               "or the map as it was")
         self.timeline_button.connect("toggled", self._timeline_toggled)
         main.append(toolbar(plan_button, map_button, measure, self.wall_mode, self.scale_mode, undo,
-                            self.timeline_button, zooming, help_button, self.panel_toggle))
+                            redraw, self.timeline_button, zooming, help_button, self.panel_toggle))
         main.append(stage)
 
         self.split = Adw.OverlaySplitView(content=main, sidebar=sidebar,
@@ -3590,6 +3593,10 @@ def _icon_details(view, kind: str, index: int) -> str:
                  for name, bands in site["networks"]]
         if site.get("placed"):
             lines.append("Where you put it. Its reach is worked out from this position.")
+        elif site.get("unfitted"):
+            lines.append("Its signal changes too little between points to place it, so shown "
+                         "in the middle of where it was heard loudest. Measure closer to it, "
+                         "or move it to where it really is.")
         elif site.get("guess"):
             lines.append("Heard at too few points to locate, so shown beside the point where "
                          "it was strongest. Move it to where it really is.")

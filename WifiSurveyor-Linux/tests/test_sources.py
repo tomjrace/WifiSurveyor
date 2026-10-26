@@ -97,6 +97,21 @@ class ApSiteTests(unittest.TestCase):
         self.assertFalse(analysis.same_radio(*heard, heard, {"00:00:00:00:00:01": 36,
                                                              "00:00:00:40:00:01": 40}))
 
+    def test_a_fit_that_runs_off_the_plan_stays_where_it_was_heard(self) -> None:
+        # Levels that barely change, rising towards the bottom edge: the best fit is
+        # far beyond the plan, which says only that the points can't place it.
+        points = [Point(x, y, networks=[network(-75 + 0.004 * y, "AA:00:00:00:00:01")])
+                  for x, y in grid_points()]
+        project = Project(width=1000, height=800, meters_per_pixel=MPP, points=points)
+        self.assertTrue(analysis.locate(project, analysis.ap_samples(project, "AA:00:00:00:00:01"))["outside"])
+
+        site = analysis.ap_sites(project)[0]
+
+        self.assertTrue(site["unfitted"] and site["guess"] and site["rough"])
+        self.assertFalse(site["outside"])
+        self.assertTrue(0 <= site["x"] <= 1000 and 0 <= site["y"] <= 800)
+        self.assertGreater(site["y"], 400)          # pulled towards where it was loudest
+
     def test_walls_shared_between_access_points_give_the_same_fit(self) -> None:
         here = (300.0, 250.0)
         walls = [Wall(500, 0, 500, 800, db=8), Wall(0, 400, 1000, 400, db=5)]

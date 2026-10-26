@@ -561,6 +561,9 @@ def ap_sites(project, ssid: str | None = None, band: str = "All", limit: int = 2
             name, radio_band = seen[bssid]
             located.append((name, radio_band, dict(found, bssid=bssid)))
 
+    mpp = project.meters_per_pixel
+    near = 3.0 / mpp if mpp else 0.04 * float(np.hypot(project.width, project.height))
+
     _gx, _gy, cx, cy = search_grid(project)
     walls_everywhere = None
     located = []
@@ -578,13 +581,22 @@ def ap_sites(project, ssid: str | None = None, band: str = "All", limit: int = 2
         found = locate(project, [(project.points[i].x, project.points[i].y, heard_at[i])
                                  for i in indices],
                        walls=None if walls_everywhere is None else walls_everywhere[..., indices])
+        if found and (found["outside"] or not (0 <= found["x"] <= project.width
+                                               and 0 <= found["y"] <= project.height)):
+            # The best fit ran off the plan: the levels change too little across the points
+            # to tell near and loud from far and louder. Show it in the middle of where it
+            # was heard, pulled towards the loudest, with a ring as wide as that.
+            xs = np.array([project.points[i].x for i in indices])
+            ys = np.array([project.points[i].y for i in indices])
+            weights = 10 ** (np.array([heard_at[i] for i in indices]) / 10)
+            x, y = float(np.average(xs, weights=weights)), float(np.average(ys, weights=weights))
+            spread = float(np.sqrt(np.average((xs - x) ** 2 + (ys - y) ** 2, weights=weights)))
+            found.update(x=x, y=y, radius=max(spread, near), rough=True, outside=False,
+                         rms=99.0, guess=True, unfitted=True)
         if found:
             add(radio, found)
             placed.update(radio)
             count += 1
-
-    mpp = project.meters_per_pixel
-    near = 3.0 / mpp if mpp else 0.04 * float(np.hypot(project.width, project.height))
 
     # Heard at too few points to locate: a rough guess beside the point where it was strongest,
     # so it can still be named and moved to where it really is. Without a chosen network, only
@@ -610,7 +622,8 @@ def ap_sites(project, ssid: str | None = None, band: str = "All", limit: int = 2
         if site is None:
             site = {"x": found["x"], "y": found["y"], "radius": found["radius"],
                     "rough": found["rough"], "outside": found["outside"], "networks": {},
-                    "fits": [], "guess": found.get("guess", False)}
+                    "fits": [], "guess": found.get("guess", False),
+                    "unfitted": found.get("unfitted", False)}
             sites.append(site)
         else:
             site["rough"] = site["rough"] and found["rough"]

@@ -1018,6 +1018,8 @@ def _inventory(project, ctx, sites, chip, ssid, band) -> str:
                           + (f", {network.get('width_mhz')} MHz" if (network.get('width_mhz') or 20) > 20 else "")
                           + (f", reach ≈{reach:.0f} ft" if reach else ""))
         status = ("placed" if site.get("placed") else
+                  "middle of where it was heard; its signal changes too little to place it"
+                  if site.get("unfitted") else
                   "near the point where it was strongest" if site.get("guess") else
                   "outside the plan" if site["outside"]
                   else "estimated, rough" if site["rough"] else "estimated")
