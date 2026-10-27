@@ -104,6 +104,9 @@ class Point:
     capture: dict | None = None
     # Latency, jitter and loss to the gateway and DNS time, when the adapter was connected
     connectivity: dict | None = None
+    # One connection check per focus network joined here (Project.focus_networks), each
+    # connectivity.check's result with its "ssid"; connectivity holds the first of them
+    checks: list[dict] = field(default_factory=list)
     # Bluetooth devices heard here (address, name, rssi, kind, vendor), when that scan was on
     bluetooth: list[dict] = field(default_factory=list)
     # Item trackers heard here (AirTags, Find Hub tags, SmartTags…): address, rssi, kind,
@@ -142,6 +145,21 @@ class Point:
             and (band == "All" or n.get("band") == band)
         ]
         return max(candidates, key=lambda n: n["rssi"], default=None)
+
+    def checks_made(self) -> list[dict]:
+        """
+        Every connection check made here: one per focus network joined, or the single one.
+        A focus network that wasn't tried (not heard, no saved password) isn't a check.
+        """
+        made = [c for c in self.checks if not c.get("skipped")]
+        return made or ([] if self.checks else [self.connectivity] if self.connectivity else [])
+
+    def check_for(self, ssid: str | None) -> dict | None:
+        """The connection check made on ``ssid`` here, or with no network named, the first."""
+        made = self.checks_made()
+        if ssid:
+            return next((c for c in made if c.get("ssid") == ssid), None)
+        return made[0] if made else None
 
 
 @dataclass
@@ -194,6 +212,12 @@ class Project:
     speed_tests: dict = field(default_factory=dict)
     # What each point measures, chosen in the survey setup: core.surveysetup.Setup.to_dict()
     survey_setup: dict = field(default_factory=dict)
+    # The networks this survey is about: each is joined and checked at every point that hears
+    # it, they're the ones the report judges and plans channels for, and their access points
+    # are looked for on the property only. Empty: whichever is strongest at each point.
+    focus_networks: list[str] = field(default_factory=list)
+    # Watch-tab sessions placed on this plan: core.watchreport.summary() plus "x" and "y"
+    watches: list[dict] = field(default_factory=list)
     # Names heard for hidden access points while listening in monitor mode, BSSID (upper
     # case) → name (core.hidden). The points' networks carry the names too.
     hidden_names: dict = field(default_factory=dict)
@@ -226,7 +250,8 @@ class Project:
         if self.rf_calibration:
             payload["rf_calibration"] = self.rf_calibration
         for key in ("ap_pins", "virtual_aps", "client_allowance_db", "report_info", "radar",
-                    "tone_source", "speed_tests", "survey_setup", "hidden_names", "geo"):
+                    "tone_source", "speed_tests", "survey_setup", "hidden_names", "geo",
+                    "focus_networks", "watches"):
             if getattr(self, key):
                 payload[key] = getattr(self, key)
         if self.extra:
@@ -273,6 +298,7 @@ class Project:
             report_info=copy.deepcopy(self.report_info), tone_source=copy.deepcopy(self.tone_source),
             speed_tests=copy.deepcopy(self.speed_tests),
             survey_setup=copy.deepcopy(self.survey_setup), geo=copy.deepcopy(self.geo),
+            focus_networks=list(self.focus_networks),
             # The same site's access points: a name heard once names them in the follow-up too
             hidden_names=dict(self.hidden_names))
         # A survey from before site ids is still tied to the follow-up by their identical plan
@@ -317,6 +343,8 @@ class Project:
             hidden_names={str(k).upper(): str(v)
                           for k, v in (payload.get("hidden_names") or {}).items()},
             geo=dict(payload.get("geo") or {}),
+            focus_networks=[str(n) for n in payload.get("focus_networks") or []],
+            watches=list(payload.get("watches") or []),
             extra=payload.get("extra") or {},
         )
 

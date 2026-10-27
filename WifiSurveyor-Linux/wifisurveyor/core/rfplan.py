@@ -16,6 +16,17 @@ TU_US = 1024
 
 # ---------- radios ----------
 
+# BSSIDs the survey shows are one radio although their addresses don't say so (some vendors
+# number a radio's extra BSSIDs by flipping a bit in the middle), each to the BSSID it's grouped
+# under. Set from the survey being analysed (analysis.Context): a BSSID is the same radio
+# wherever it's heard.
+_twins: dict[str, str] = {}
+
+
+def use_twins(twins: dict[str, str]) -> None:
+    global _twins
+    _twins = {bssid.upper(): radio for bssid, radio in twins.items()}
+
 
 def _octets(bssid: str) -> list[int]:
     try:
@@ -25,7 +36,8 @@ def _octets(bssid: str) -> list[int]:
 
 
 def radio_key(network: dict) -> tuple:
-    octets = _octets(network.get("bssid") or "")
+    bssid = network.get("bssid") or ""
+    octets = _octets(_twins.get(bssid.upper(), bssid))
     freq = round(float(network.get("freq_mhz") or 0))
     if len(octets) != 6:
         return (freq, network.get("bssid"))
@@ -456,7 +468,9 @@ def channel_plan(project, ssid: str, allow_dfs: bool = False) -> list[Suggestion
             cost += foreign_cost(key, block)
             # Radar heard there: the radio would be forced off it, so it's a last resort
             cost += 1000 if any(overlaps(block, heard) for heard in radar) else 0
-            cost -= 0.5 if abs(centre - radio.center) < 1 else 0     # don't move it for nothing
+            # Don't move it for nothing: dodging a neighbour heard at a point or two isn't
+            # worth a change
+            cost -= 2 if abs(centre - radio.center) < 1 else 0
             if best is None or cost < best[0]:
                 best = (cost, (centre, width, name))
         chosen[key] = best[1]
@@ -476,3 +490,26 @@ def channel_plan(project, ssid: str, allow_dfs: bool = False) -> list[Suggestion
             shared(key, lambda k: (own[k].center, own[k].width)),
             shared(key, lambda k: (chosen[k][0], chosen[k][1]))))
     return sorted(suggestions, key=lambda s: (s.radio.band, s.radio.freq))
+
+
+def plans(project, names: list[str], allow_dfs: bool = False) -> list[tuple[str, list[str], list[Suggestion]]]:
+    """
+    A channel plan for each of ``names``, as (network, the others it shares its radios with,
+    plan). A network whose radios are mostly another's already planned isn't planned again: one
+    radio can only be on one channel.
+    """
+    found: list[tuple[str, list[str], list[Suggestion]]] = []
+    planned: list[set] = []
+    for name in names:
+        plan = channel_plan(project, name, allow_dfs)
+        keys = {item.radio.key for item in plan}
+        if not keys:
+            continue
+        index = next((i for i, seen in enumerate(planned)
+                      if len(keys & seen) >= 0.75 * min(len(keys), len(seen))), None)
+        if index is None:
+            found.append((name, [], plan))
+            planned.append(keys)
+        else:
+            found[index][1].append(name)
+    return found

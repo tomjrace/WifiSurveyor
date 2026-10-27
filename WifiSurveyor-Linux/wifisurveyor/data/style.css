@@ -108,3 +108,21 @@ columnview.data-table label.warning,
 columnview.data-table label.error {
   font-weight: bold;
 }
+
+/* Relaunch as root: bright, so it's found before monitor mode or a capture is needed */
+button.root-button {
+  background: #f5a00f;
+  color: #1a1200;
+  font-weight: bold;
+}
+
+button.root-button:hover {
+  background: #ffb52e;
+}
+
+button.root-button.big {
+  min-height: 56px;
+  font-size: 1.15em;
+  padding-left: 28px;
+  padding-right: 28px;
+}

@@ -113,16 +113,19 @@ def saved_profile(ssid: str) -> str | None:
 ENCRYPTED_KEY_MGMT = {"wpa-psk", "sae", "wpa-eap", "wpa-eap-suite-b-192", "owe", "ieee8021x"}
 
 
-def why_not_test(ssid: str, heard: list[dict]) -> str | None:
+def why_not_test(ssid: str, heard: list[dict], allow_open: bool = False) -> str | None:
     """
     Why a network shouldn't be joined and speed-tested from here, or None if it can be: it
     has to be heard at this point, encrypted, and have its password saved on this computer,
-    so nothing ever tries an open network or asks for a password mid-survey.
+    so nothing ever tries an open network or asks for a password mid-survey. ``allow_open``
+    lets an open network through, for one the surveyor chose to test by name.
     """
     here = [n for n in heard if n.get("ssid") == ssid]
     if not here:
         return "not heard here"
     if not any(n.get("secured") for n in here):
+        if allow_open:
+            return None if have("nmcli") else "NetworkManager (nmcli) isn't available to join it"
         return "an open network: only encrypted networks are joined"
     if not have("nmcli"):
         return "NetworkManager (nmcli) isn't available to join it"

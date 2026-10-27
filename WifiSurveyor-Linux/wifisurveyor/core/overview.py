@@ -113,15 +113,15 @@ def build(project, ctx: analysis.Context, ssid: str | None, band: str,
 
     audit = rfplan.audit(project)
     names = sorted({n["ssid"] for p in project.points for n in p.networks if n["ssid"]})
-    ours = [ssid] if ssid else _main_networks(project)
+    ours = [ssid] if ssid else main_networks(project)
     builders = {
         "roaming": lambda: _roaming(project, ctx, at, audit, ours, total),
         "noise": lambda: _noise(project, ctx, at, total),
         "coverage": lambda: _coverage(project, ctx, at, sites, total,
                                       sorted(networks.get("Only 2.4 GHz reaches", set())
                                              | networks.get("5 GHz too weak", set()))),
-        "capacity": lambda: _capacity(project, ctx, at, audit, ssid, allow_dfs, total),
-        "connection": lambda: _connection(project, at, total),
+        "capacity": lambda: _capacity(project, ctx, at, audit, ours, allow_dfs, total),
+        "connection": lambda: _connection(project, at, ours, total),
         "security": lambda: _security(project, at, names, ours),
         "survey": lambda: _survey(project, at, total),
     }
@@ -145,8 +145,13 @@ def top_actions(themes: list[Theme], limit: int = 6) -> list[tuple[Theme, Recomm
     return pairs[:limit]
 
 
-def _main_networks(project, limit: int = 3) -> list[str]:
-    """With no network chosen, the ones heard at the most points: most likely the site's own."""
+def main_networks(project, limit: int = 3) -> list[str]:
+    """
+    With no network chosen, the survey's focus networks, or failing those the ones heard at
+    the most points: most likely the site's own.
+    """
+    if getattr(project, "focus_networks", None):
+        return list(project.focus_networks)
     counts: dict[str, int] = {}
     for point in project.points:
         for name in {n["ssid"] for n in point.networks if n["ssid"]}:
@@ -411,18 +416,19 @@ def _reach_hint(project, ctx, sites) -> str:
             "through walls, so plan spacing around that.")
 
 
-def _capacity(project, ctx, at, audit, ssid, allow_dfs, total):
+def _capacity(project, ctx, at, audit, ours, allow_dfs, total):
     items: list[Recommendation] = []
-    if ssid:
-        plan = rfplan.channel_plan(project, ssid, allow_dfs)
+    planned = rfplan.plans(project, ours, allow_dfs)
+    for name, also, plan in planned:
         moves = [s for s in plan if s.changed]
         if moves:
             before = sum(s.shared_before for s in plan)
             after = sum(s.shared_after for s in plan)
             items.append(Recommendation(
                 "High" if before - after >= 2 else "Medium",
-                f"Apply the suggested channel plan: {_plural(len(moves), 'radio')} of {ssid} "
-                "change channel (" + "; ".join(f"{s.current} → {s.suggested}" for s in moves[:4])
+                f"Apply the suggested channel plan: {_plural(len(moves), 'radio')} of "
+                f"{' and '.join([name, *also])} change channel ("
+                + "; ".join(f"{s.current} → {s.suggested}" for s in moves[:4])
                 + ("…" if len(moves) > 4 else "") + ").",
                 f"The network's radios share channels with each other {before} times now, "
                 f"{after} after.",
@@ -432,8 +438,10 @@ def _capacity(project, ctx, at, audit, ssid, allow_dfs, total):
     if shared:
         items.append(Recommendation(
             "Medium" if len(shared) * 3 >= total else "Low",
-            "Give neighbouring access points different channels, and use narrower channels "
-            "(40 MHz, or 20 MHz on 2.4 GHz) where the band is crowded.",
+            "Give neighbouring access points different channels"
+            + (" (see the suggested channel plan)" if planned else "")
+            + ", and use narrower channels (40 MHz, or 20 MHz on 2.4 GHz) where the band is "
+            "crowded.",
             f"The serving channel is shared with other radios at {_share(shared, total)}.",
             "More airtime per user at busy times.", shared))
     busy = at("Channel too busy", "Channel nearly full")
@@ -487,13 +495,39 @@ def _capacity(project, ctx, at, audit, ssid, allow_dfs, total):
     return items, summary
 
 
-def _connection(project, at, total):
+def _connection(project, at, ours, total):
     items: list[Recommendation] = []
     failed = at("Connection failed")
     if failed:
+        # Which network each check was on, and what went wrong there
+        by_network: dict[tuple[str, str], tuple[set[str], list[int]]] = {}
+        for number in failed:
+            for result in project.points[number - 1].checks_made():
+                if not result.get("error") or "isn't connected" in result["error"]:
+                    continue
+                bssids, numbers = by_network.setdefault(
+                    (result.get("ssid") or "", result["error"]), (set(), []))
+                if result.get("bssid"):
+                    bssids.add(result["bssid"].upper())
+                numbers.append(number)
+        found = "; ".join(
+            f"{ssid or 'an unnamed network'}"
+            + (f" ({', '.join(sorted(bssids))})" if bssids else "")
+            + f" at point{'s' if len(numbers) != 1 else ''} {_numbers(numbers)}: {error}"
+            for (ssid, error), (bssids, numbers) in by_network.items())
+        names = sorted({ssid for ssid, _error in by_network if ssid})
+        action = ("Check association, DHCP and the gateway on "
+                  f"{', '.join(names) or 'the network'} where the connection check failed.")
+        if (names and not getattr(project, "focus_networks", None)
+                and not (getattr(project, "survey_setup", None) or {}).get("join")):
+            action += (f" The survey didn't join a network itself, so the check ran on whatever "
+                       f"this computer had connected to: {', '.join(names)}. If that isn't "
+                       "your network, choose the networks to test under Measuring → Networks "
+                       "to survey; connect to each once from the system's Wi-Fi settings so its "
+                       "password is saved.")
         items.append(Recommendation(
-            "High", "Check association, DHCP and the gateway where the connection check failed.",
-            f"The adapter couldn't get a working connection at {_share(failed, total)}.",
+            "High", action,
+            f"The adapter couldn't get a working connection at {_share(failed, total)}: {found}.",
             "Devices that connect and stay connected.", failed))
     lossy = at("Packet loss", "High latency", "Jitter")
     if lossy:
@@ -520,7 +554,7 @@ def _connection(project, at, total):
             "Low", "Point DHCP at a faster DNS resolver, or enable caching on the gateway.",
             f"DNS lookups took 150 ms or more at {_share(dns, total)}.",
             "Every new page and app request starts faster.", dns))
-    checked = sum(1 for p in project.points if p.connectivity and "latency_ms" in p.connectivity)
+    checked = sum(1 for p in project.points if any("latency_ms" in c for c in p.checks_made()))
     summary = ("Connection problems found." if items else
                f"Latency, loss and DNS were good at all {checked} checked points." if checked
                else "No connection checks were made, so this couldn't be judged.")

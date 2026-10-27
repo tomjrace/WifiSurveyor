@@ -11,11 +11,12 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import cairo
 from gi.repository import Adw, Gdk, GdkPixbuf, GLib, GObject, Gtk, Pango
 
-from ..core import (advice, analysis, heatmap, hidden, history, library, planning,
+from ..core import (advice, analysis, heatmap, hidden, history, library, planning, watchreport,
                     positioning, rangechoice, rfplan, settings, surveysetup, tonetest)
 from ..core.colours import signal_quality, ssid_colour
 from ..core.project import Point, Project, Wall
@@ -28,7 +29,7 @@ from ..rf import hackrf as hrf
 from ..rf.analyzer import label as analyzer_label
 from ..rf.analyzer import ranges_for, share_channels, share_ranges
 from ..rf import spectrum as spec
-from . import advanced_tests
+from . import advanced_tests, focus_networks
 from .common import bind_device_dropdown, run_in_thread, scrolled, selected_device, selected_text, toolbar
 from .spectrum_ring import MIN_RADIUS, RING_SHARE, describe, draw_ring
 from .spectrum_view import snapshot_png
@@ -143,6 +144,15 @@ class SurveyView(Gtk.Box):
                                       subtitle="Needs each network heard at 4 or more points",
                                       active=True)
         self.show_aps.connect("notify::active", lambda *_: self.redraw_heatmap())
+        self.ap_scope = Adw.ComboRow(
+            title="Which access points",
+            subtitle="Every network heard is located, off the property too once the plan has a "
+                     "scale",
+            model=Gtk.StringList.new(["Every network heard", "Only the networks to survey"]),
+            selected=1 if settings.get("survey_ap_scope") == "focus" else 0)
+        self.ap_scope.connect("notify::selected", lambda row, _p: (
+            settings.put("survey_ap_scope", "focus" if row.get_selected() == 1 else "all"),
+            self.redraw_heatmap()))
         self.show_noise = Adw.SwitchRow(title="Where the noise is coming from",
                                         subtitle="Needs spectrum captured at 3 or more points",
                                         active=True)
@@ -177,10 +187,15 @@ class SurveyView(Gtk.Box):
             subtitle=ME_HELP,
             active=bool(settings.get("survey_locate", False)))
         self.show_me.connect("notify::active", self._show_me_toggled)
+        self.focus_row = Adw.ActionRow(title="Networks to survey", subtitle_lines=0)
+        choose_focus = Gtk.Button(label="Choose…", valign=Gtk.Align.CENTER)
+        choose_focus.connect("clicked", lambda *_: self.choose_focus())
+        self.focus_row.add_suffix(choose_focus)
         self.join = Adw.SwitchRow(
             title="Join the network first",
-            subtitle="Connects the adapter to the network chosen under Heatmap (using its "
-                     "saved password) so the connection check and throughput test can run",
+            subtitle="With no networks to survey chosen: connects the adapter to the network "
+                     "chosen under Heatmap (using its saved password) so the connection check "
+                     "and throughput test can run",
             active=bool(settings.get("survey_join", False)))
         self.join.connect("notify::active",
                           lambda row, _p: settings.put("survey_join", row.get_active()))
@@ -269,6 +284,7 @@ class SurveyView(Gtk.Box):
         self.quality_group.add(self.quality_row)
         layers = Adw.PreferencesGroup(title="On the map")
         layers.add(self.show_aps)
+        layers.add(self.ap_scope)
         layers.add(self.show_noise)
         layers.add(self.show_bt)
         layers.add(self.show_clients)
@@ -281,6 +297,7 @@ class SurveyView(Gtk.Box):
         measuring.add(self.sweeps)
         measuring.add(self.dwell_count)
         measuring.add(self.dwell_seconds)
+        measuring.add(self.focus_row)
         measuring.add(self.check_link)
         measuring.add(self.join)
         measuring.add(self.speed)
@@ -458,6 +475,10 @@ class SurveyView(Gtk.Box):
         session.on("changed", self.redraw_heatmap)     # any edit, here or in another view
         session.on("changed", self._forget_locate_model)
         session.on("project", self._new_survey_for_locator)
+        session.on("project", self._describe_focus)
+        session.on("add-watch", self.add_watch)
+        session.on("project", self._pending_watch)
+        self._describe_focus()
         for event in ("project", "changed"):
             session.on(event, self._describe_radar)
             session.on(event, self._describe_tone)
@@ -855,6 +876,15 @@ class SurveyView(Gtk.Box):
             self._virtual_menu(box, index)
             self._popup(box, x, y)
             return
+        if kind == "watch":
+            watch = project.watches[index]
+            box.append(Gtk.Label(label=f"Watched: {watch['ssid'] or '(hidden)'}", xalign=0,
+                                 css_classes=["heading"]))
+            box.append(Gtk.Label(label=_watch_details(watch), xalign=0, wrap=True,
+                                 max_width_chars=40, css_classes=["dim-label"]))
+            self._watch_menu(box, index)
+            self._popup(box, x, y)
+            return
         if kind in ("site", "noise", "bt", "bt_near", "client", "tag"):
             box.append(Gtk.Label(label=_icon_title(self, kind, index), xalign=0, css_classes=["heading"]))
             box.append(Gtk.Label(label=_icon_details(self, kind, index), xalign=0, wrap=True,
@@ -898,10 +928,12 @@ class SurveyView(Gtk.Box):
             if extra:
                 info.append(Gtk.Label(label=(lambda text: text[:1].upper() + text[1:])(", ".join(extra)), xalign=0, wrap=True,
                                       max_width_chars=40, css_classes=["dim-label"]))
-            if point.connectivity:
-                info.append(Gtk.Label(label=connectivity.describe(point.connectivity), xalign=0,
-                                      wrap=True, max_width_chars=40,
-                                      css_classes=["error" if connectivity.problem(point.connectivity)
+            for result in point.checks or ([point.connectivity] if point.connectivity else []):
+                text = (f"{result['ssid']}: not joined, {result['skipped']}" if result.get("skipped")
+                        else (f"{result['ssid']}: " if point.checks and result.get("ssid") else "")
+                        + connectivity.describe(result))
+                info.append(Gtk.Label(label=text, xalign=0, wrap=True, max_width_chars=40,
+                                      css_classes=["error" if connectivity.problem(result)
                                                    else "dim-label"]))
             if point.throughput:
                 info.append(Gtk.Label(label=throughput.describe(point.throughput), xalign=0,
@@ -978,7 +1010,9 @@ class SurveyView(Gtk.Box):
                               "move_virtual": "Tap the planned access point's new position.",
                               "move_site": "Tap where this access point really is.",
                               "move_point": "Tap where this point was really measured.",
-                              "place_tone": "Tap where the HackRF sending the test tone is."}[kind]
+                              "place_tone": "Tap where the HackRF sending the test tone is.",
+                              "place_watch": "Tap where you watched the network from.",
+                              "move_watch": "Tap where you watched the network from."}[kind]
                              + " (Tap Undo to cancel.)")
 
     def _place(self, plan_x: float, plan_y: float) -> None:
@@ -999,6 +1033,13 @@ class SurveyView(Gtk.Box):
             self._set_tone_source(plan_x, plan_y)
             self.show_tone_setup()
             return
+        elif kind == "place_watch":
+            project.watches.append(dict(target, x=plan_x, y=plan_y))
+            self.status.set_text(f"Added the watch of {target['ssid'] or 'the network'}: it's on "
+                                 "the map and in the report under Networks watched.")
+        elif kind == "move_watch":
+            project.watches[target].update(x=plan_x, y=plan_y)
+            self.status.set_text("Moved the watch.")
         elif kind == "move_virtual":
             ap = project.virtual_aps[target]
             ap["x"], ap["y"] = plan_x, plan_y
@@ -1163,7 +1204,13 @@ class SurveyView(Gtk.Box):
             if error:
                 self.status.set_text(f"Couldn't check the connection: {error}")
                 return
-            point.connectivity = result
+            if point.checks:
+                # Replaces this network's check, keeping the other focus networks'
+                point.checks = [c for c in point.checks if c.get("ssid") != result.get("ssid")]
+                point.checks.append(result)
+                point.connectivity = point.checks_made()[0]
+            else:
+                point.connectivity = result
             self.session.changed()
             self.status.set_text(f"Point {number}: {connectivity.describe(result)}")
 
@@ -1458,7 +1505,8 @@ class SurveyView(Gtk.Box):
         chosen = self.ssid.get_selected()
         chosen_ssid = None if chosen <= 0 else self.ssid.get_model().get_string(chosen)
         check_link = self.check_link.get_active()
-        join_first = self.join.get_active() and chosen_ssid is not None
+        focus = list(session.project.focus_networks or [])
+        join_first = self.join.get_active() and chosen_ssid is not None and not focus
         speed_server = self.speed_server.get_text().strip() if self.speed.get_active() else ""
         scan_bluetooth = self.scan_bt.get_active()
         scan_finder_tags = self.scan_tags.get_active()
@@ -1482,6 +1530,63 @@ class SurveyView(Gtk.Box):
 
         def say(part: str, text: str) -> None:
             GLib.idle_add(self._show_progress, part, text)
+
+        # The Advanced table speed-tests its own networks on their adapters
+        advanced_ssids = {r["ssid"] for r in plan["rows"]} if plan else set()
+
+        def test_focus(point) -> None:
+            """
+            Joins each focus network heard at this point, strongest first, and checks it (and
+            speed-tests it), keeping one result per network in point.checks. One not heard here,
+            or without a saved password, is noted as skipped, not tried.
+            """
+            strongest: dict[str, int] = {}
+            for network in point.networks:
+                if network["ssid"] in focus:
+                    strongest[network["ssid"]] = max(strongest.get(network["ssid"], -200),
+                                                     int(network["rssi"]))
+            order = sorted(strongest, key=lambda name: -strongest[name])
+            speeds = []
+            for number, name in enumerate(order, start=1):
+                prefix = f"{name} ({number} of {len(order)})"
+                skip = connectivity.why_not_test(name, point.networks, allow_open=True)
+                if skip:
+                    point.checks.append({"ssid": name, "skipped": skip})
+                    say("wifi", f"{prefix}: not joined, {skip}")
+                    continue
+                say("wifi", f"{prefix}: joining…")
+                trouble = connectivity.join(device, name)
+                if trouble:
+                    point.checks.append({"ssid": name, "error": f"couldn't join: {trouble}"})
+                    point.notes.append(f"Couldn't join {name}: {trouble}")
+                    continue
+                if not point.checks_made():
+                    point.link = wifi.link(device) or point.link    # the network a client would use
+                if check_link:
+                    say("wifi", f"{prefix}: checking the connection…")
+                    result = connectivity.check(device)
+                    result.setdefault("ssid", name)
+                    point.checks.append(result)
+                    trouble = connectivity.problem(result)
+                    if trouble:
+                        point.notes.append(f"Connection on {name}: {trouble}")
+                if speed_server and name not in advanced_ssids:
+                    say("wifi", f"{prefix}: testing throughput to {speed_server}…")
+                    speed = throughput.test(device, speed_server)
+                    speed["ssid"] = name
+                    speeds.append(speed)
+                    if speed.get("error"):
+                        point.notes.append(f"{name}: {throughput.describe(speed)}")
+            missing = [name for name in focus if name not in strongest]
+            for name in missing:
+                point.checks.append({"ssid": name, "skipped": "not heard here"})
+            made = point.checks_made()
+            point.connectivity = made[0] if made else None
+            if speeds:
+                point.throughput = speeds[0]
+                point.throughputs.extend(speeds[1:])
+            say("wifi", f"Networks tested: {len(made)} of {len(focus)}"
+                        + (f"; not heard here: {', '.join(missing)}" if missing else ""))
 
         def scan_wifi(passive: bool):
             many = len(scan_devices) > 1
@@ -1770,7 +1875,10 @@ class SurveyView(Gtk.Box):
                 except Exception as error:     # the measurement stands without its picture
                     point.notes.append(f"Couldn't keep a picture of the spectrum: {error}")
 
-            if join_first and (check_link or speed_server):
+            if focus and (check_link or speed_server):
+                # Every focus network heard here in turn, strongest first: join, check, speed
+                test_focus(point)
+            elif join_first and (check_link or speed_server):
                 skip = connectivity.why_not_test(chosen_ssid, point.networks)
                 if skip:
                     say("wifi", f"Not joining {chosen_ssid}: {skip}")
@@ -1781,7 +1889,7 @@ class SurveyView(Gtk.Box):
                         point.notes.append(f"Couldn't join the network: {trouble}")
                     else:
                         point.link = wifi.link(device) or point.link
-            if check_link:
+            if check_link and not focus:
                 # Last, so its packets can't show up in the spectrum
                 say("wifi", "Checking the connection…")
                 point.connectivity = connectivity.check(device)
@@ -1789,8 +1897,10 @@ class SurveyView(Gtk.Box):
                 if trouble:
                     point.notes.append(f"Connection: {trouble}")
 
-            on = (wifi.link(device) or {}).get("ssid") if speed_server else None
-            if speed_server and not chosen_ssid:
+            on = (wifi.link(device) or {}).get("ssid") if speed_server and not focus else None
+            if focus:
+                pass                              # tested network by network above
+            elif speed_server and not chosen_ssid:
                 say("wifi", "Throughput not tested: choose the network under Heatmap → Network")
             elif speed_server and on != chosen_ssid:
                 say("wifi", f"Throughput not tested: the adapter isn't on {chosen_ssid}"
@@ -1815,12 +1925,13 @@ class SurveyView(Gtk.Box):
                     except Exception as error:
                         point.notes.append(f"Couldn't load the public iperf3 server list: {error}")
                 slots = slots or iperf_servers.Slots([])
-                point.throughputs = throughput.run_plan(
+                ran = throughput.run_plan(
                     rows, fallback_server, slots, say=lambda text: say("wifi", text),
                     heard=point.networks)
-                point.notes.extend(throughput.describe(r) for r in point.throughputs if r.get("error"))
-                tested = [r for r in point.throughputs if not r.get("skipped")]
-                skipped = [r for r in point.throughputs if r.get("skipped")]
+                point.throughputs.extend(ran)
+                point.notes.extend(throughput.describe(r) for r in ran if r.get("error"))
+                tested = [r for r in ran if not r.get("skipped")]
+                skipped = [r for r in ran if r.get("skipped")]
                 say("wifi", f"Speed tests: {len(tested)} of {len(rows)} networks tested"
                             + (f"; skipped {', '.join(r['ssid'] + ' (' + r['skipped'].split(':')[0] + ')' for r in skipped)}"
                                if skipped else ""))
@@ -1965,6 +2076,58 @@ class SurveyView(Gtk.Box):
         networks |= {r.ssid for r in self.session.last_scan if r.ssid}
         advanced_tests.AdvancedDialog(self.session.project, sorted(networks),
                                       self._advanced_saved).present(self.get_root())
+
+    def add_watch(self, watch: dict) -> None:
+        """A Watch-tab session into this survey: placed where it was watched from, if there's a plan."""
+        if self.viewing is not None:
+            self.timeline_button.set_active(False)
+            self._leave_timeline()
+        if not self.session.project.plan_png:
+            self.session.project.watches.append(dict(watch))
+            self.session.changed()
+            self.status.set_text(f"Added the watch of {watch['ssid'] or 'the network'} to this "
+                                 "survey's report. Load a plan to place it on the map.")
+            return
+        self._start_placing("place_watch", watch)
+
+    def _pending_watch(self, *_args) -> None:
+        """A watch waiting for the survey just opened: placed on it once everything has loaded."""
+        pending = getattr(self.session, "pending_watch", None)
+        project = self.session.project
+        if not pending or not project.path:
+            return
+        # The file chosen, or where it's saved from now on when it lived in root's folder
+        wanted = {pending["path"], str(Path(library.shared_path_for(pending["path"])).resolve())}
+        if str(Path(project.path).resolve()) in wanted:
+            self.session.pending_watch = None
+            GLib.idle_add(lambda: (self.session.emit("add-watch", pending["watch"]), False)[1])
+
+    def _watch_menu(self, box: Gtk.Box, index: int) -> None:
+        move = Gtk.Button(child=Adw.ButtonContent(icon_name="find-location-symbolic", label="Move"))
+        move.connect("clicked", lambda *_: self._start_placing("move_watch", index))
+        delete = Gtk.Button(child=Adw.ButtonContent(icon_name="user-trash-symbolic",
+                                                    label="Remove from the survey"),
+                            css_classes=["destructive-action"])
+
+        def remove(*_args) -> None:
+            self.menu.popdown()
+            del self.session.project.watches[index]
+            self.session.changed()
+
+        delete.connect("clicked", remove)
+        box.append(move)
+        box.append(delete)
+
+    def choose_focus(self) -> None:
+        focus_networks.FocusDialog(self.session.project, self.session.last_scan,
+                                   self._focus_saved).present(self.get_root())
+
+    def _focus_saved(self) -> None:
+        self.session.changed()            # part of the survey: it changes the report and map
+        self._describe_focus()
+
+    def _describe_focus(self, *_args) -> None:
+        self.focus_row.set_subtitle(focus_networks.summary(self.session.project))
 
     def _advanced_saved(self) -> None:
         self.session.changed()            # the table is part of the survey
@@ -2701,6 +2864,8 @@ class SurveyView(Gtk.Box):
         show_clients = self.show_clients.get_active()
         show_tags = self.show_tags.get_active()
         profile = self._profile_key()
+        focus = set(project.focus_networks or [])
+        ap_networks = focus if focus and self.ap_scope.get_selected() == 1 else None
 
         snapshot = copy.copy(project)
         snapshot.points = list(project.points)
@@ -2710,7 +2875,7 @@ class SurveyView(Gtk.Box):
         def work():
             result = _compute_map(snapshot, key, ssid, band, channel, show_aps, show_noise,
                                   profile, bssid, show_bt, show_clients, show_tags, cellular_band,
-                                  other_band)
+                                  other_band, ap_networks)
             if baseline is None or key not in CHANGE_SCALE:
                 return result, None
             return result, _compare(snapshot, baseline, key, ssid, band, channel, profile, bssid)
@@ -2812,7 +2977,7 @@ class SurveyView(Gtk.Box):
         cr.set_dash([6 / self.scale, 5 / self.scale])
         cr.set_line_width(1.5 / self.scale)
         for site in self.sites:
-            if site["outside"]:
+            if site["outside"] and not site.get("beyond"):
                 continue                  # a fit at the plan's edge has no meaningful ring
             cr.set_source_rgba(0.15, 0.45, 0.90, 0.45)
             cr.arc(site["x"], site["y"], max(site["radius"], 14 / self.scale), 0, 2 * math.pi)
@@ -2865,7 +3030,7 @@ class SurveyView(Gtk.Box):
 
         # A warning badge on points whose connection had trouble
         for point in project.points:
-            if connectivity.problem(point.connectivity):
+            if any(connectivity.problem(check) for check in point.checks_made()):
                 sx, sy = self._to_screen(point.x, point.y)
                 _draw_badge(cr, sx + 9, sy - 9)
 
@@ -2891,13 +3056,34 @@ class SurveyView(Gtk.Box):
             self._icon_hits.append((sx, sy, "noise", index))
         for index, site in enumerate(self.sites):
             sx, sy = self._to_screen(site["x"], site["y"])
+            beyond = site.get("beyond")
+            if beyond and not site.get("placed"):
+                # Off the property: a dashed line from the plan's nearest edge out to it
+                ex, ey = self._to_screen(beyond["edge_x"], beyond["edge_y"])
+                cr.save()
+                cr.set_dash([5, 4])
+                cr.set_line_width(1.5)
+                cr.set_source_rgba(0.15, 0.45, 0.90, 0.8)
+                cr.move_to(ex, ey)
+                cr.line_to(sx, sy)
+                cr.stroke()
+                cr.restore()
             _draw_site(cr, sx, sy, site["rough"], site.get("placed", False))
             lines = [(site["name"], None)] if site.get("name") else []
             lines += [(name, bands) for name, bands in site["networks"][:3]]
             if len(site["networks"]) > 3:
                 lines.append((f"+{len(site['networks']) - 3} more", None))
+            if beyond and not site.get("placed"):
+                lines.append((_beyond_text(beyond), None))
             _draw_label(cr, sx + 18, sy, lines)
             self._icon_hits.append((sx, sy, "site", index))
+        for index, watch in enumerate(project.watches):
+            if watch.get("x") is None:
+                continue
+            sx, sy = self._to_screen(watch["x"], watch["y"])
+            _draw_watch(cr, sx, sy, _watch_colour(watch))
+            _draw_label(cr, sx + 18, sy, [(watchreport.headline(watch), None)])
+            self._icon_hits.append((sx, sy, "watch", index))
         for index, device in enumerate(self.bt):
             located = device["located"]
             if not located:
@@ -3173,7 +3359,7 @@ def _compute_map(project, key: str, ssid: str | None, band: str, channel: int | 
                  show_aps: bool = True, show_noise: bool = True, profile: str = "data",
                  bssid: str | None = None, show_bt: bool = True, show_clients: bool = True,
                  show_tags: bool = True, cellular_band: str | None = None,
-                 other_band: str | None = None):
+                 other_band: str | None = None, ap_networks: set[str] | None = None):
     _title, _unit, low, high, higher_is_better = analysis.METRICS[key]
     context = analysis.Context(project, profile=profile)
     context.cellular_band = cellular_band
@@ -3188,7 +3374,8 @@ def _compute_map(project, key: str, ssid: str | None, band: str, channel: int | 
             samples.append((point.x, point.y, value))
 
     radius = _heat_radius(project)
-    sites = analysis.ap_sites(project, ssid, band) if (show_aps or key == "predicted") else []
+    sites = (analysis.ap_sites(project, ssid, band, networks=ap_networks)
+             if (show_aps or key == "predicted") else [])
     if key == "predicted":
         overlay = planning.render_predicted(project, context, ssid, band, sites)
     elif key in ("verdict", "requirement"):
@@ -3496,6 +3683,12 @@ def _channel_text(channels: list[int]) -> str:
     return f"ch {channels[0]}–{channels[-1]}"
 
 
+def _beyond_text(beyond: dict) -> str:
+    """How far off the plan an access point is: "about 85 ft north-east of the plan"."""
+    feet = beyond.get("feet")
+    return (f"about {feet:.0f} ft " if feet is not None else "") + beyond["way"]
+
+
 def _noise_detail(noise: dict) -> str:
     return (f"{noise['center']:.0f} MHz · {BAND_NAMES.get(noise['band'], '')} "
             f"{_channel_text(noise['channels'])} · peak {noise['peak']:.0f} dBm")
@@ -3593,6 +3786,10 @@ def _icon_details(view, kind: str, index: int) -> str:
                  for name, bands in site["networks"]]
         if site.get("placed"):
             lines.append("Where you put it. Its reach is worked out from this position.")
+        elif site.get("beyond"):
+            lines.append(f"Off the plan: {_beyond_text(site['beyond'])}"
+                         + (", rough" if site["rough"] else "")
+                         + ". Located from how its signal fades across the points.")
         elif site.get("unfitted"):
             lines.append("Its signal changes too little between points to place it, so shown "
                          "in the middle of where it was heard loudest. Measure closer to it, "
@@ -3607,6 +3804,8 @@ def _icon_details(view, kind: str, index: int) -> str:
         else:
             lines.append("Estimated from how its signal fades. If you know where it is, move it "
                          "there.")
+        if site.get("lat_lon") and not site.get("guess"):
+            lines.append("At {:.5f}, {:.5f}".format(*site["lat_lon"]))
         project = view.session.project
         reaches = [(fit["ssid"], fit["band"], advice.reach_feet(fit, analysis.Context(project).profile.primary,
                                                                 project.meters_per_pixel))
@@ -3790,6 +3989,46 @@ def _draw_site(cr: cairo.Context, x: float, y: float, rough: bool, placed: bool 
     if placed:
         cr.arc(x, y, 2.5, 0, 2 * math.pi)
         cr.fill()
+
+
+def _watch_colour(watch: dict) -> tuple[float, float, float]:
+    """Green, amber or red by how much of the watched time the network was usable."""
+    worst = min((b["availability"] for b in watch.get("bands", []) if b.get("availability") is not None),
+                default=None)
+    return {"good": (0.13, 0.64, 0.29), "fair": (0.92, 0.70, 0.03),
+            "poor": (0.86, 0.15, 0.15)}[watchreport.availability_class(worst)]
+
+
+def _watch_details(watch: dict) -> str:
+    lines = [watchreport.headline(watch) + "."]
+    for band in watch.get("bands", []):
+        causes = sorted({i["cause"] for i in band["incidents"] if i["cause"]})
+        share = band.get("availability")
+        lines.append(f"{band['band'] or '?'}: " + ("—" if share is None else f"up {share:.2%}")
+                     + (f", {len(band['incidents'])} dropouts: {'; '.join(causes)}" if band["incidents"] else ""))
+    return "\n".join(lines)
+
+
+def _draw_watch(cr: cairo.Context, x: float, y: float, colour) -> None:
+    """Where a network was watched from: a rounded square with a pulse line through it."""
+    cr.new_path()
+    r, s = 4, 10
+    cr.move_to(x - s + r, y - s)
+    cr.arc(x + s - r, y - s + r, r, -math.pi / 2, 0)
+    cr.arc(x + s - r, y + s - r, r, 0, math.pi / 2)
+    cr.arc(x - s + r, y + s - r, r, math.pi / 2, math.pi)
+    cr.arc(x - s + r, y - s + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+    cr.set_source_rgb(*colour)
+    cr.fill_preserve()
+    cr.set_source_rgb(1, 1, 1)
+    cr.set_line_width(2)
+    cr.stroke()
+    cr.move_to(x - 7, y)
+    for dx, dy in ((-3, 0), (-1, -5), (1, 5), (3, -2), (4, 0), (7, 0)):
+        cr.line_to(x + dx, y + dy)
+    cr.set_line_width(1.6)
+    cr.stroke()
 
 
 def _draw_virtual(cr: cairo.Context, x: float, y: float) -> None:

@@ -105,6 +105,7 @@ class Context:
         from . import rfplan
 
         self.project = project
+        rfplan.use_twins(radio_twins(project))
         self.profile = rfplan.PROFILES.get(profile, rfplan.PROFILES["data"])
         # Judged as a phone would hear it: every signal target raised by the allowance
         self.allowance = float(getattr(project, "client_allowance_db", 0) or 0)
@@ -272,7 +273,7 @@ def metric(point, name: str, ctx: Context, ssid=None, bssid=None, band="All",
     if name == "predicted":
         return metric(point, "signal", ctx, ssid, bssid, band, channel)
     if name in ("latency", "loss"):
-        found = point.connectivity or {}
+        found = point.check_for(ssid) or ({} if ssid else point.connectivity or {})
         return found.get("latency_ms" if name == "latency" else "loss")
     if name == "requirement":
         ok, _why = requirement(point, ctx, ssid, band)
@@ -375,23 +376,65 @@ def wall_loss(project, x1, y1, x2, y2) -> float:
 
 
 SEARCH_GRID = 64
+REFINE_GRID = 25
+EXPONENTS = np.arange(2.0, 4.01, 0.25)
+# How far past the plan's edges access points are looked for once the plan has a scale, as a
+# share of its longer side: far enough for a neighbour across the street or the car park.
+BEYOND_PLAN = 2.0
+# What a radio can be received at 1 m from it, by band: 10-30 dBm EIRP less the free-space loss
+# at 1 m (40, 47 and 48 dB), with room for the adapter's own offset. A fit that needs more is a
+# distant radio's flat readings explained by an impossibly loud one, so it isn't allowed.
+LEVEL_AT_1M = {"2.4": (-45.0, -5.0), "5": (-52.0, -12.0), "6": (-53.0, -13.0)}
 
 
-def search_grid(project, grid: int = SEARCH_GRID):
-    """The candidate positions locate tries: the plan and a tenth beyond each edge."""
-    gx = np.linspace(-0.1 * project.width, 1.1 * project.width, grid)
-    gy = np.linspace(-0.1 * project.height, 1.1 * project.height, grid)
+def search_grid(project, grid: int = SEARCH_GRID, beyond: bool = False):
+    """
+    The candidate positions locate tries: the plan and a tenth beyond each edge, or with
+    ``beyond`` (which needs the scale), BEYOND_PLAN of the plan's longer side past each edge.
+    """
+    if beyond and project.meters_per_pixel:
+        reach = BEYOND_PLAN * max(project.width, project.height)
+        gx = np.linspace(-reach, project.width + reach, grid)
+        gy = np.linspace(-reach, project.height + reach, grid)
+    else:
+        gx = np.linspace(-0.1 * project.width, 1.1 * project.width, grid)
+        gy = np.linspace(-0.1 * project.height, 1.1 * project.height, grid)
     cx, cy = np.meshgrid(gx, gy)
     return gx, gy, cx, cy
 
 
+def _fit_grid(levels, xs, ys, cx, cy, walls, mpp, p0_range):
+    """The best path-loss fit at each candidate position, over the exponents: rms, exponent, P0."""
+    distance = np.sqrt((cx[..., None] - xs) ** 2 + (cy[..., None] - ys) ** 2) * mpp
+    log_distance = 10 * np.log10(np.maximum(distance, 0.5))
+    best = None
+    for exponent in EXPONENTS:
+        predicted = exponent * log_distance + walls
+        p0 = (levels + predicted).mean(axis=-1)
+        if p0_range:
+            p0 = np.clip(p0, *p0_range)
+        error = levels - (p0[..., None] - predicted)
+        rms = np.sqrt((error ** 2).mean(axis=-1))
+        index = np.unravel_index(np.argmin(rms), rms.shape)
+        if best is None or rms[index] < best["rms"]:
+            best = {"x": float(cx[index]), "y": float(cy[index]), "rms": float(rms[index]),
+                    "exponent": float(exponent), "p0": float(p0[index]), "grid": rms}
+    return best
+
+
 def locate(project, samples: list[tuple[float, float, float]], grid: int = SEARCH_GRID,
-           walls: np.ndarray | None = None):
+           walls: np.ndarray | None = None, band: str | None = None, beyond: bool = False):
     """
     Fits received = P0 - 10 n log10(distance) - walls over a grid of positions and
-    exponents, solving P0 in closed form at each. Returns position, spread, and fit.
-    ``walls`` is grid_wall_loss for these samples over search_grid, when the caller already
-    has it: it's most of the work, and the same for every access point heard at a point.
+    exponents, solving P0 in closed form at each, then again on a finer grid around the best.
+    Returns position, spread, and fit. ``walls`` is grid_wall_loss for these samples over
+    search_grid, when the caller already has it: it's most of the work, and the same for every
+    access point heard at a point.
+
+    With the scale set, ``band`` holds P0 to what a real radio on it can be (LEVEL_AT_1M), and
+    ``beyond`` searches well past the plan for transmitters off the property. "edge" says the
+    fit ran to the end of the search, so the position means nothing; "outside" that it isn't
+    on the plan, or ran to the edge.
     """
     if len(samples) < 4:
         return None
@@ -401,35 +444,34 @@ def locate(project, samples: list[tuple[float, float, float]], grid: int = SEARC
     if np.hypot(xs.max() - xs.min(), ys.max() - ys.min()) < 40:
         return None
 
+    scaled = bool(project.meters_per_pixel)
     mpp = project.meters_per_pixel or 0.05
-    gx, gy, cx, cy = search_grid(project, grid)
-
-    distance = np.sqrt((cx[..., None] - xs) ** 2 + (cy[..., None] - ys) ** 2) * mpp
-    log_distance = 10 * np.log10(np.maximum(distance, 0.5))
-
+    p0_range = LEVEL_AT_1M.get(band) if scaled else None
+    gx, gy, cx, cy = search_grid(project, grid, beyond)
     if walls is None:
         walls = grid_wall_loss(project.walls, xs, ys, cx, cy)
-
-    best = None
-    for exponent in np.arange(2.0, 4.01, 0.25):
-        predicted = exponent * log_distance + walls
-        p0 = (levels + predicted).mean(axis=-1)
-        error = levels - (p0[..., None] - predicted)
-        rms = np.sqrt((error ** 2).mean(axis=-1))
-        index = np.unravel_index(np.argmin(rms), rms.shape)
-        if best is None or rms[index] < best["rms"]:
-            best = {"x": float(cx[index]), "y": float(cy[index]), "rms": float(rms[index]),
-                    "exponent": float(exponent), "p0": float(p0[index]), "grid": rms}
+    best = _fit_grid(levels, xs, ys, cx, cy, walls, mpp, p0_range)
 
     close = best["grid"] <= best["rms"] + 3
-    cell = (gx[1] - gx[0]) * (gy[1] - gy[0])
-    radius = float(np.sqrt(close.sum() * cell / np.pi))
+    step_x, step_y = gx[1] - gx[0], gy[1] - gy[0]
+    radius = float(np.sqrt(close.sum() * step_x * step_y / np.pi))
     edge = not (gx[1] < best["x"] < gx[-2] and gy[1] < best["y"] < gy[-2])
+
+    # Closer in: the coarse grid only says which cell it's in
+    fx = np.linspace(best["x"] - 1.5 * step_x, best["x"] + 1.5 * step_x, REFINE_GRID)
+    fy = np.linspace(best["y"] - 1.5 * step_y, best["y"] + 1.5 * step_y, REFINE_GRID)
+    fcx, fcy = np.meshgrid(fx, fy)
+    fine = _fit_grid(levels, xs, ys, fcx, fcy, grid_wall_loss(project.walls, xs, ys, fcx, fcy),
+                     mpp, p0_range)
+    if fine["rms"] <= best["rms"]:
+        best = fine
+
+    on_plan = 0 <= best["x"] <= project.width and 0 <= best["y"] <= project.height
     return {
         "x": best["x"], "y": best["y"], "rms": best["rms"], "exponent": best["exponent"],
         "p0": best["p0"], "radius": radius, "points": len(samples),
         "rough": edge or best["rms"] > 6 or radius > 0.25 * np.hypot(project.width, project.height),
-        "outside": edge,
+        "outside": edge or (beyond and not on_plan), "edge": edge,
     }
 
 
@@ -518,36 +560,107 @@ def same_radio(a: str, b: str, heard: dict[str, dict[int, float]], channels: dic
             and first.max() - first.min() >= 6)
 
 
-def ap_sites(project, ssid: str | None = None, band: str = "All", limit: int = 24) -> list[dict]:
+def radio_twins(project) -> dict[str, str]:
     """
-    Locates the most-measured radios, then gathers those that land together into one site,
-    since one access point usually carries several: a radio per band, and often more than
-    one SSID on each. BSSIDs that are surely one radio are located together and count once
-    towards ``limit``. Each site lists the SSIDs heard from it and on which bands.
+    Every BSSID that same_radio shows is another's radio, to the most-heard BSSID of its radio,
+    from everything heard across the survey.
     """
-    seen: dict[str, tuple[str, str]] = {}
     heard: dict[str, dict[int, float]] = {}
     channels: dict[str, object] = {}
     for index, point in enumerate(project.points):
         for network in point.networks:
+            bssid = network["bssid"]
+            channels.setdefault(bssid, network.get("channel"))
+            heard.setdefault(bssid, {}).setdefault(index, float(network["rssi"]))
+    on_channel: dict[object, list[str]] = {}
+    for bssid in sorted(heard, key=lambda b: (-len(heard[b]), b)):
+        on_channel.setdefault(channels[bssid], []).append(bssid)
+    twins: dict[str, str] = {}
+    for together in on_channel.values():
+        for index, leader in enumerate(together):
+            if leader in twins:
+                continue
+            for other in together[index + 1:]:
+                if other not in twins and same_radio(leader, other, heard, channels):
+                    twins[other] = leader
+    return twins
+
+
+def focus_here(project, point) -> str | None:
+    """
+    The focus network a client here would use, the strongest of them heard, or the first if
+    none is: None when the survey has no focus networks.
+    """
+    focus = list(getattr(project, "focus_networks", None) or [])
+    if not focus:
+        return None
+    heard = [n for n in point.networks if n["ssid"] in focus]
+    return max(heard, key=lambda n: n["rssi"])["ssid"] if heard else focus[0]
+
+
+def off_plan(project, x: float, y: float) -> dict | None:
+    """
+    How far past the plan's edge a spot is, and which way (by the compass once the plan is on
+    a map), or None when it's on the plan.
+    """
+    from . import geo
+
+    nearest_x = min(max(x, 0.0), float(project.width))
+    nearest_y = min(max(y, 0.0), float(project.height))
+    dx, dy = x - nearest_x, y - nearest_y
+    if not dx and not dy:
+        return None
+    way = geo.compass(project, dx, dy)
+    if way is None:
+        sides = [s for s in ("above" if dy < 0 else "below" if dy > 0 else "",
+                             "left" if dx < 0 else "right" if dx > 0 else "") if s]
+        way = " and ".join(sides) + " the plan" if len(sides) == 1 else \
+            f"{sides[0]} and to the {sides[1]} of the plan"
+        way = way.replace("left the plan", "to the left of the plan").replace(
+            "right the plan", "to the right of the plan")
+    else:
+        way += " of the plan"
+    return {"feet": project.feet(float(np.hypot(dx, dy))), "way": way,
+            "edge_x": nearest_x, "edge_y": nearest_y}
+
+
+def ap_sites(project, ssid: str | None = None, band: str = "All", limit: int | None = None,
+             networks: set[str] | None = None) -> list[dict]:
+    """
+    Locates the radios, most-measured first, then gathers those that land together into one
+    site, since one access point usually carries several: a radio per band, and often more
+    than one SSID on each. BSSIDs that are surely one radio are located together and count
+    once towards ``limit`` (None: every radio heard). ``networks`` keeps to the radios that
+    carry one of them. Each site lists the SSIDs heard from it and on which bands.
+
+    Once the plan has a scale, access points are looked for well past its edges too, so a
+    neighbour's is placed where it is, not on the plan; such a site says how far off and which
+    way ("beyond"), and with the plan on a map, where on the Earth ("lat_lon").
+    """
+    from . import geo
+
+    seen: dict[str, tuple[str, str]] = {}
+    heard: dict[str, dict[int, float]] = {}
+    channels: dict[str, object] = {}
+    carries: dict[str, set[str]] = {}
+    for index, point in enumerate(project.points):
+        for network in point.networks:
             if (ssid and network["ssid"] != ssid) or (band != "All" and network.get("band") != band):
                 continue
+            carries.setdefault(network["bssid"], set()).add(network["ssid"])
             bssid = network["bssid"]
             seen.setdefault(bssid, (network["ssid"], network.get("band", "")))
             channels.setdefault(bssid, network.get("channel"))
             heard.setdefault(bssid, {}).setdefault(index, float(network["rssi"]))
     ranked = sorted(seen, key=lambda bssid: len(heard[bssid]), reverse=True)
 
-    radios: list[list[str]] = []
-    grouped: set[str] = set()
-    for leader in ranked:
-        if leader in grouped:
-            continue
-        radio = [leader] + [other for other in ranked
-                            if other not in grouped and other != leader
-                            and same_radio(leader, other, heard, channels)]
-        grouped.update(radio)
-        radios.append(radio)
+    twins = radio_twins(project)
+    by_radio: dict[str, list[str]] = {}
+    for bssid in ranked:
+        by_radio.setdefault(twins.get(bssid, bssid), []).append(bssid)
+    radios = [radio for radio in by_radio.values()
+              if networks is None or any(carries[b] & networks for b in radio)]
+    limit = len(radios) if limit is None else limit
 
     def levels(radio: list[str]) -> dict[int, float]:
         by_point: dict[int, list[float]] = {}
@@ -564,8 +677,9 @@ def ap_sites(project, ssid: str | None = None, band: str = "All", limit: int = 2
     mpp = project.meters_per_pixel
     near = 3.0 / mpp if mpp else 0.04 * float(np.hypot(project.width, project.height))
 
-    _gx, _gy, cx, cy = search_grid(project)
-    walls_everywhere = None
+    # The survey's own networks are on the property: only other people's are looked for past it
+    focus = set(getattr(project, "focus_networks", None) or [])
+    walls_over: dict[bool, np.ndarray] = {}     # wall loss for every point, per search area
     located = []
     placed: set[str] = set()
     count = 0
@@ -574,18 +688,21 @@ def ap_sites(project, ssid: str | None = None, band: str = "All", limit: int = 2
         if count >= limit or len(heard_at) < 4:
             continue
         indices = sorted(heard_at)
-        if project.walls and walls_everywhere is None:
-            walls_everywhere = grid_wall_loss(
+        beyond = bool(mpp) and not any(carries[b] & focus for b in radio)
+        if project.walls and beyond not in walls_over:
+            _gx, _gy, cx, cy = search_grid(project, beyond=beyond)
+            walls_over[beyond] = grid_wall_loss(
                 project.walls, np.array([p.x for p in project.points]),
                 np.array([p.y for p in project.points]), cx, cy)
         found = locate(project, [(project.points[i].x, project.points[i].y, heard_at[i])
                                  for i in indices],
-                       walls=None if walls_everywhere is None else walls_everywhere[..., indices])
-        if found and (found["outside"] or not (0 <= found["x"] <= project.width
-                                               and 0 <= found["y"] <= project.height)):
-            # The best fit ran off the plan: the levels change too little across the points
-            # to tell near and loud from far and louder. Show it in the middle of where it
-            # was heard, pulled towards the loudest, with a ring as wide as that.
+                       walls=walls_over[beyond][..., indices] if beyond in walls_over else None,
+                       band=seen[radio[0]][1], beyond=beyond)
+        if found and (found["edge"] or (not beyond and off_plan(project, found["x"], found["y"]))):
+            # The best fit ran to the end of the search, or off a plan without a scale to say
+            # how far is plausible: the levels change too little across the points to tell
+            # near and loud from far and louder. Show it in the middle of where it was heard,
+            # pulled towards the loudest, with a ring as wide as that.
             xs = np.array([project.points[i].x for i in indices])
             ys = np.array([project.points[i].y for i in indices])
             weights = 10 ** (np.array([heard_at[i] for i in indices]) / 10)
@@ -599,16 +716,13 @@ def ap_sites(project, ssid: str | None = None, band: str = "All", limit: int = 2
             count += 1
 
     # Heard at too few points to locate: a rough guess beside the point where it was strongest,
-    # so it can still be named and moved to where it really is. Without a chosen network, only
-    # the strong ones, which are probably close by; the rest would just be clutter.
+    # so it can still be named and moved to where it really is
     for radio in radios:
         if radio[0] in placed or count >= limit:
             continue
         heard_at = levels(radio)
         index = max(heard_at, key=heard_at.get)
         level = heard_at[index]
-        if ssid is None and level < -60:
-            continue
         x, y = project.points[index].x, project.points[index].y
         add(radio, {
             "x": min(project.width, x + near * 0.6), "y": y, "radius": near, "rough": True,
@@ -637,6 +751,8 @@ def ap_sites(project, ssid: str | None = None, band: str = "All", limit: int = 2
             for name, bands in sorted(site["networks"].items())
         ]
         site["bssids"] = [fit["bssid"] for fit in site["fits"]]
+        site["beyond"] = None if site["guess"] else off_plan(project, site["x"], site["y"])
+        site["lat_lon"] = None if site["guess"] else geo.plan_lat_lon(project, site["x"], site["y"])
     return apply_pins(project, sites, ssid, band)
 
 

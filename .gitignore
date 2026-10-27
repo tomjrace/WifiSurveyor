@@ -25,6 +25,8 @@ obj/
 *.wsurvey
 *.wsurvey.tmp
 *report*.html
+*overview*.html
+*watch*.html
 *incidents*.csv
 *.kml
 *.kmz
@@ -43,6 +45,7 @@ obj/
 # Watch (monitor) sessions and app data folders
 session.jsonl
 *.jsonl
+*.jsonl.gz
 monitor/
 captures/
 iq/

@@ -242,6 +242,7 @@ class SsidMonitor:
         self._switched_monitor = False
         self._autoconnect_was: str | None = None
         self._minute: dict | None = None
+        self._logged_row: dict | None = None     # the spectrum row the log gets next
         self._join_tries = 0
         self._next_join = 0.0
         self._next_scan = 0.0
@@ -313,6 +314,10 @@ class SsidMonitor:
         if self._autoconnect_was is not None:
             wifi.run("nmcli", "device", "set", self.device, "autoconnect", self._autoconnect_was)
         if self.log:
+            with self.lock:
+                last = self._fold_logged(None)
+            if last:
+                self.log.write(last)
             self.log.write({"type": "stop"})
             self.log.close()
         self.state, self.status = "stopped", "Stopped."
@@ -827,6 +832,9 @@ class SsidMonitor:
             self.channel_count += 1
             self.traces.append(trace)
             self._fold_minute(trace)
+            logged = self._fold_logged(trace)
+        if self.log and logged:
+            self.log.write(logged)
         if self.log:
             self.log.write({"type": "channel", **{k: (round(v, 3) if isinstance(v, float) else v)
                                                   for k, v in reading.items() if v is not None}})
@@ -834,15 +842,46 @@ class SsidMonitor:
         return True
 
     def _fold_minute(self, trace: dict) -> None:
-        """One waterfall row a minute for the long view: the strongest level in each bin."""
+        """
+        One waterfall row a minute for the long view: the strongest level in each bin, and the
+        average over the minute's sweeps.
+        """
         minute = int(trace["t"] // 60)
         row = self._minute
         if row is not None and row["minute"] == minute and len(row["max"]) == len(trace["max"]):
             row["max"] = [max(a, b) for a, b in zip(row["max"], trace["max"])]
+            row["sum"] = [a + b for a, b in zip(row["sum"], trace["avg"])]
+            row["n"] += 1
+            row["avg"] = [a / row["n"] for a in row["sum"]]
             return
         self._minute = {"minute": minute, "t": minute * 60.0, "start": trace["start"],
-                        "step": trace["step"], "max": list(trace["max"])}
+                        "step": trace["step"], "max": list(trace["max"]),
+                        "avg": list(trace["avg"]), "sum": list(trace["avg"]), "n": 1}
         self.minutes.append(self._minute)
+
+    def _fold_logged(self, trace: dict | None) -> dict | None:
+        """
+        The spectrum as the log keeps it, a row per outage.SPECTRUM_SECONDS: returns the row
+        just finished (to write) when ``trace`` starts the next one, or with None, the last.
+        """
+        bucket = None if trace is None else int(trace["t"] // outage.SPECTRUM_SECONDS)
+        row = self._logged_row
+        if (trace is not None and row is not None and row["bucket"] == bucket
+                and len(row["sum"]) == len(trace["avg"])):
+            row["sum"] = [a + b for a, b in zip(row["sum"], trace["avg"])]
+            row["max"] = [max(a, b) for a, b in zip(row["max"], trace["max"])]
+            row["n"] += 1
+            return None
+        self._logged_row = None if trace is None else {
+            "bucket": bucket, "start": trace["start"], "step": trace["step"],
+            "sum": list(trace["avg"]), "max": list(trace["max"]), "n": 1}
+        if row is None:
+            return None
+        start, step, avg, peak = outage.thin_bins(row["start"], row["step"],
+                                                  [v / row["n"] for v in row["sum"]], row["max"])
+        return {"type": "spectrum", "at": row["bucket"] * outage.SPECTRUM_SECONDS,
+                "start": round(start, 3), "step": round(step, 4), "sweeps": row["n"],
+                "avg": outage.pack_levels(avg), "max": outage.pack_levels(peak)}
 
     def channel_evidence(self, start: float, end: float) -> dict | None:
         """The channel during an incident against the five minutes before it."""

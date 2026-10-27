@@ -1011,24 +1011,183 @@ def _jsonable(value):
     return str(value)
 
 
+# The channel's spectrum goes into the log a row per SPECTRUM_SECONDS (the average and the
+# peak of each bin over the sweeps in it), thinned to SPECTRUM_BINS and packed a byte a bin
+SPECTRUM_SECONDS = 30.0
+SPECTRUM_BINS = 128
+LEVEL_FLOOR = -160                     # dBm a packed byte of 0 stands for; 1 dB a step
+
+
+def thin_bins(start: float, step: float, avg: list[float], peak: list[float],
+              limit: int = SPECTRUM_BINS) -> tuple[float, float, list[float], list[float]]:
+    """At most ``limit`` bins: neighbours merged, averages averaged and peaks kept."""
+    count = len(avg)
+    group = max(1, math.ceil(count / limit))
+    if group == 1:
+        return start, step, list(avg), list(peak)
+    merged_avg = [statistics.fmean(avg[i:i + group]) for i in range(0, count, group)]
+    merged_peak = [max(peak[i:i + group]) for i in range(0, count, group)]
+    return start + step * (group - 1) / 2, step * group, merged_avg, merged_peak
+
+
+def pack_levels(levels) -> str:
+    """dBm levels as text, a byte each to the nearest dB."""
+    import base64
+
+    return base64.b64encode(bytes(int(min(255, max(0, round(v - LEVEL_FLOOR)))) for v in levels)).decode()
+
+
+def unpack_levels(text: str) -> list[float]:
+    import base64
+
+    return [float(b + LEVEL_FLOOR) for b in base64.b64decode(text)]
+
+
+LOG_NAME = "session.jsonl"
+COMPACT_NAME = "session.jsonl.gz"
+# Beats kept every one, this long either side of an incident, and either side of a beat that
+# wasn't healthy: the detail a diagnosis or a report looks at
+FULL_AROUND_INCIDENT = 600.0
+FULL_AROUND_TROUBLE = 120.0
+# A log nothing has written to for this long belongs to a watch that's over (a crash ends one
+# without its "stop")
+STALE_SECONDS = 3600.0
+
+
+def session_file(folder: Path) -> Path | None:
+    """A session folder's log: the one being written, or once it's over, its compacted copy."""
+    folder = Path(folder)
+    for name in (LOG_NAME, COMPACT_NAME):
+        if (folder / name).is_file():
+            return folder / name
+    return None
+
+
+def read_records(path: Path):
+    """Every record of a session log, plain or compacted, skipping a line cut short."""
+    import gzip
+
+    path = Path(path)
+    if path.is_dir():
+        path = session_file(path) or path / LOG_NAME
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                yield json.loads(line)
+            except ValueError:
+                continue                       # a line cut short when the power went
+
+
 def read_session(path: Path) -> tuple[dict, list[dict], list[Incident]]:
     """A session log back: its start record, its beats, and its incidents."""
     start, beats, incidents = {}, [], {}
-    with Path(path).open(encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue                       # a line cut short when the power went
-            kind = record.get("type")
-            if kind == "start" and not start:
-                start = record
-            elif kind == "beat":
-                beats.append(record)
-            elif kind == "incident":
-                incident = Incident.from_json(record["incident"])
-                incidents[incident.id] = incident
+    for record in read_records(path):
+        kind = record.get("type")
+        if kind == "start" and not start:
+            start = record
+        elif kind == "beat":
+            beats.append(record)
+        elif kind == "incident":
+            incident = Incident.from_json(record["incident"])
+            incidents[incident.id] = incident
     return start, beats, sorted(incidents.values(), key=lambda i: i.start)
+
+
+def _minute(start: float, beats: list[dict]) -> dict:
+    """
+    A minute of healthy beats as one record: each number's min, median and max (losses added
+    up, beacons and booleans as the worst and the share), and how many beats were in each state.
+    """
+    summary: dict = {"t": start, "type": "minute", "n": len(beats), "until": beats[-1]["t"]}
+    keys = {key for beat in beats for key in beat} - {"t", "type"}
+    for key in sorted(keys):
+        values = [beat[key] for beat in beats if beat.get(key) is not None]
+        if not values:
+            continue
+        if all(isinstance(v, bool) for v in values):
+            summary[key] = round(sum(values) / len(values), 3)
+        elif all(isinstance(v, (int, float)) for v in values):
+            if key == "losses":
+                summary[key] = sum(values)
+            else:
+                summary[key] = [min(values), round(statistics.median(values), 3), max(values)]
+        else:
+            counts: dict[str, int] = {}
+            for value in values:
+                counts[str(value)] = counts.get(str(value), 0) + 1
+            summary[key] = counts
+    return summary
+
+
+def compact(path: Path) -> Path | None:
+    """
+    Shrinks a finished session's log to what's worth keeping, gzipped beside it, and removes
+    the original. Everything but the beats stays as it was: incidents, events, channel readings.
+    Beats are kept every one around incidents and around any that wasn't healthy; the long
+    healthy stretches between become a record a minute (see _minute). Returns the new file,
+    or None when there was nothing to compact.
+    """
+    import gzip
+
+    from .project import hand_back
+
+    path = Path(path)
+    if path.name != LOG_NAME or not path.is_file():
+        return None
+    records = list(read_records(path))
+    keep: list[tuple[float, float]] = []
+    for record in records:
+        kind = record.get("type")
+        if kind == "open":
+            began = record.get("start", record["t"])
+            keep.append((began - FULL_AROUND_INCIDENT, began + FULL_AROUND_INCIDENT))
+        elif kind == "incident":
+            found = record.get("incident") or {}
+            began = found.get("start", record["t"])
+            ended = found.get("end") or record["t"]
+            keep.append((began - FULL_AROUND_INCIDENT, ended + FULL_AROUND_INCIDENT))
+        elif kind == "beat" and record.get("state") not in (None, "up"):
+            keep.append((record["t"] - FULL_AROUND_TROUBLE, record["t"] + FULL_AROUND_TROUBLE))
+    out, minutes = [], {}
+    for record in records:
+        if record.get("type") != "beat" or any(a <= record["t"] <= b for a, b in keep):
+            out.append(record)
+        else:
+            minutes.setdefault(int(record["t"] // 60) * 60.0, []).append(record)
+    out += [_minute(start, beats) for start, beats in minutes.items()]
+    out.sort(key=lambda r: r.get("t", 0))      # stable: the start record stays first
+    target = path.with_name(COMPACT_NAME)
+    temporary = target.with_name(COMPACT_NAME + ".tmp")
+    with gzip.open(temporary, "wt", encoding="utf-8") as handle:
+        for record in out:
+            handle.write(json.dumps(record, separators=(",", ":"), default=_jsonable) + "\n")
+    temporary.replace(target)
+    hand_back(target)
+    path.unlink()
+    return target
+
+
+def finished(path: Path) -> bool:
+    """Whether a plain log is of a watch that's over: it stopped, or nothing writes to it."""
+    path = Path(path)
+    if time.time() - path.stat().st_mtime > STALE_SECONDS:
+        return True
+    with path.open("rb") as handle:
+        handle.seek(max(0, path.stat().st_size - 200))
+        return b'"type":"stop"' in handle.read()
+
+
+def compact_finished(base: Path | None = None) -> int:
+    """Compacts every session under ``base`` (the monitor folder) that's over. Returns how many."""
+    done = 0
+    for log in sorted(Path(base or folder()).glob(f"*/{LOG_NAME}")):
+        try:
+            if finished(log) and compact(log):
+                done += 1
+        except (OSError, ValueError):
+            continue                           # one unreadable session doesn't stop the rest
+    return done
 
 
 def incidents_csv(incidents: list[Incident]) -> str:

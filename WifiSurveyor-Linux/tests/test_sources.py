@@ -6,7 +6,7 @@ import math
 import unittest
 from unittest import mock
 
-from wifisurveyor.core import analysis
+from wifisurveyor.core import analysis, overview, rfplan
 from wifisurveyor.core.project import Point, Project, Wall
 from wifisurveyor.net import wifi
 from wifisurveyor.rf import explorer
@@ -119,8 +119,58 @@ class ApSiteTests(unittest.TestCase):
                   for x, y in grid_points()]
         project = Project(width=1000, height=800, meters_per_pixel=MPP, points=points, walls=walls)
         site = analysis.ap_sites(project)[0]
-        alone = analysis.locate(project, analysis.ap_samples(project, "AA:00:00:00:00:01"))
+        alone = analysis.locate(project, analysis.ap_samples(project, "AA:00:00:00:00:01"),
+                                band="2.4", beyond=True)
         self.assertEqual((site["x"], site["y"]), (alone["x"], alone["y"]))
+
+
+def twin_survey():
+    """
+    Two access points that each send Office and Guest from one radio, the Guest BSSID a bit
+    flip in the middle of the address, which the address rule alone doesn't group.
+    """
+    here, there = (300.0, 250.0), (850.0, 650.0)
+    points = [Point(x, y, networks=[
+        network(path_loss(x, y, here), "00:11:22:33:44:50"),
+        network(path_loss(x, y, here), "00:11:22:73:44:50", ssid="Guest"),
+        network(path_loss(x, y, there), "00:11:99:33:44:50"),
+        network(path_loss(x, y, there), "00:11:99:73:44:50", ssid="Guest"),
+    ]) for x, y in grid_points()]
+    return Project(width=1000, height=800, meters_per_pixel=MPP, points=points)
+
+
+class RadioTwinTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        rfplan.use_twins({})
+
+    def test_a_radios_other_ssid_doesnt_contend_with_it(self) -> None:
+        project = twin_survey()
+        rfplan.use_twins({})
+        self.assertEqual(len(rfplan.radios(project.points[0].networks)), 4)
+        analysis.Context(project)
+        found = rfplan.radios(project.points[0].networks)
+        self.assertEqual(len(found), 2)
+        self.assertEqual({frozenset(r.ssids) for r in found}, {frozenset({"Office", "Guest"})})
+
+    def test_networks_on_the_same_radios_get_one_plan(self) -> None:
+        project = twin_survey()
+        analysis.Context(project)
+        planned = rfplan.plans(project, ["Office", "Guest"])
+        self.assertEqual([(name, also) for name, also, _plan in planned], [("Office", ["Guest"])])
+        self.assertEqual(len(planned[0][2]), 2)
+
+    def test_a_failed_connection_check_names_its_network(self) -> None:
+        project = twin_survey()
+        for point in project.points[:2]:
+            point.connectivity = {"ssid": "Lobby", "bssid": "cc:00:00:00:00:01",
+                                  "error": "connected, but no gateway: DHCP may have failed"}
+        items, _summary = overview._connection(project, lambda *titles, **_: [1, 2]
+                                               if "Connection failed" in titles else [],
+                                               ["Office"], len(project.points))
+        self.assertIn("on Lobby", items[0].action)
+        self.assertIn("Networks to survey", items[0].action)
+        self.assertIn("Lobby (CC:00:00:00:00:01) at points 1, 2: connected, but no gateway",
+                      items[0].why)
 
 
 def segment_with(points_levels: dict[float, float], floor: float = -100.0) -> dict:

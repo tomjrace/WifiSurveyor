@@ -47,6 +47,38 @@ def distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r * math.asin(math.sqrt(a))
 
 
+def plan_lat_lon(project, x: float, y: float) -> tuple[float, float] | None:
+    """
+    Where a spot on the plan is on the Earth, once the plan was placed on a map (Project.geo):
+    the plan's centre is at its latitude and longitude, and the plan is turned clockwise by
+    rotation_deg from north-up, as the site map drew it.
+    """
+    placed = getattr(project, "geo", None) or {}
+    mpp = placed.get("meters_per_pixel") or project.meters_per_pixel
+    if placed.get("lat") is None or placed.get("lon") is None or not mpp:
+        return None
+    turn = math.radians(placed.get("rotation_deg") or 0.0)
+    dx, dy = x - project.width / 2, y - project.height / 2
+    east = (dx * math.cos(turn) - dy * math.sin(turn)) * mpp
+    north = -(dx * math.sin(turn) + dy * math.cos(turn)) * mpp
+    lat = placed["lat"] + north / 111_320.0
+    lon = placed["lon"] + east / (111_320.0 * math.cos(math.radians(placed["lat"])))
+    return lat, lon
+
+
+def compass(project, dx: float, dy: float) -> str | None:
+    """The compass direction of a step across the plan, or None when north isn't known."""
+    placed = getattr(project, "geo", None) or {}
+    if placed.get("lat") is None:
+        return None
+    turn = math.radians(placed.get("rotation_deg") or 0.0)
+    east = dx * math.cos(turn) - dy * math.sin(turn)
+    north = -(dx * math.sin(turn) + dy * math.cos(turn))
+    bearing = math.degrees(math.atan2(east, north)) % 360
+    return ("north", "north-east", "east", "south-east", "south", "south-west", "west",
+            "north-west")[int((bearing + 22.5) // 45) % 8]
+
+
 def describe_scale(mpp: float) -> str:
     return f"{mpp * FEET_PER_M:.3f} ft per pixel ({1 / (mpp * FEET_PER_M):.1f} pixels per foot)"
 

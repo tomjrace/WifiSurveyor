@@ -41,7 +41,8 @@ dfu-util` (HackRF, RTL-SDR, and flashing tinySA firmware).
 Scanning works unprivileged through NetworkManager, but NetworkManager only reports a 0–100
 quality, which the app maps onto dBm as an estimate. Every point records which it got, and
 the status line says so when a measurement is estimated. For true dBm, and for monitor mode
-and capture, run as root, or use **Relaunch as root** in the menu (it asks you to save first):
+and capture, run as root, or use the orange **Relaunch as root** button (in the header, and on the
+start screen; it asks you to save first):
 
 ```
 sudo env WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY .venv/bin/wifisurveyor
@@ -591,9 +592,15 @@ rename it, choose its bands, move or delete it.
 
 **Measuring.** While the analyzer sweeps, the Wi-Fi card only listens (so its probes don't
 show up in the spectrum), which misses many access points; a normal scan follows once the
-analyzer is done and the two are merged. *Join the network first* connects the adapter to the
-network chosen under *Heatmap* (using a temporary copy of its saved connection, so the
-computer's own Wi-Fi stays connected) so the connection check can run. *Test throughput* runs
+analyzer is done and the two are merged. *Networks to survey* (Choose…) picks the networks the
+survey is about: at every point, each of them that's heard is joined in turn (strongest first,
+through a temporary copy of its saved connection, so the computer's own Wi-Fi stays connected),
+its connection checked and, with *Test throughput* on, its speed tested. Only those networks are
+joined; one without a saved password is skipped with a note (connect to it once from the
+system's Wi-Fi settings), and the chooser says which have one. The report then judges each point
+for the strongest of them, adds a *Networks surveyed* table (coverage, checks that worked,
+latency, speed, and what went wrong, per network) and plans their channels. With none chosen,
+*Join the network first* connects to the one network chosen under *Heatmap*, as before. *Test throughput* runs
 iperf3 to the server you give (install `iperf3` here, and run `iperf3 -s` on a wired computer).
 *Phone allowance* raises every signal target, so "meets" means on a phone. Tap a point for *Measure
 again here* (replaces its readings; Undo restores them) and a note.
@@ -651,6 +658,35 @@ by side, the session strip has a row per band, and the incidents of both are in 
 tagged with its band. When both drop within a minute of each other, the list says to look past the
 radios (the access point itself, its power, the line behind it); when only one does, that radio,
 its channel or its clients. One spectrum analyzer takes turns between the two channels.
+
+**The spectrum on the same clock.** With an analyzer watching the channel, a fifth lane,
+SPECTRUM, shows it as a waterfall lying on its side: time across, on the same axis as the other
+lanes (it pans and zooms with them), frequency up the side, quiet blue to strong red. When the
+access point drops, its channel goes quiet in the same columns, which tells an access point that
+stopped transmitting from a link that failed while it carried on.
+
+**Reports and the survey.** *Save report…* writes the watch as a report of its own and opens it:
+availability per band, the AP's signal, gateway latency, retries and clients, any pattern in the
+dropouts, each dropout with its most likely cause and what to do, and a timeline of the whole
+watch at 30 s a column (wider for a watch over a day and a bit): each band's status, the signal,
+the gateway's reply time, the channel's power and each band's spectrum, one under the other on
+one time axis, the dropouts marked through all of them. *Add to survey* puts it on a survey: the
+one open, a recent one or any survey file (opened for you); tap where you watched from, and it's
+a W pin on the map (green, amber or red by how much of the time the network was usable) and a
+*Networks watched* section, timeline included, in the survey's report. *Earlier watches*, under
+the incidents, lists every watch saved on this computer with the same *Report…* and *Add to
+survey*, and a bin to delete one. The access point list is in signal order, strongest first.
+
+**What's kept.** While watching, everything goes into a plain log as it happens, so a crash
+loses seconds. Once a watch is over (or at the next start, for one that ended in a crash), its
+log is compacted: incidents, events, channel readings and the spectrum (a row per 30 s, average
+and peak per bin, a byte each) stay whole, every check stays for ten minutes either side of a
+dropout and around any moment that wasn't healthy, and the long healthy stretches become a
+summary a minute (lowest, median and highest of each figure). Then it's gzipped: about an
+eighth of the size, with every report figure the same. A dropout's frame capture keeps its first
+two minutes and the half minute before it recovered, so an outage overnight isn't hours of
+frames. A survey keeps a watch's summary and timeline only (tens of kilobytes an hour), so it
+reports the same after the logs are deleted.
 
 **Colours mean what a user would notice.** Red is down, amber is slow (the gateway or internet
 taking over 250 ms). Beacons missed while everything still works are drawn lower, not red: a
@@ -832,8 +868,16 @@ survey's points show as hollow circles. The verdict map can't be compared; the o
   names a cause and an action: weak coverage, non-Wi-Fi interference, neighbouring networks,
   collisions, airtime congestion, or link configuration.
 - **Source location.** A log-distance path-loss model fitted over a grid of positions and
-  exponents, counting any walls a path crosses, returning an area rather than a false
-  pinpoint.
+  exponents, counting any walls a path crosses, then again on a finer grid around the best,
+  returning an area rather than a false pinpoint. Every access point heard is located: SSIDs a
+  radio sends side by side (same channel, addresses a few bits apart, the same level everywhere)
+  are located together. Once the plan has a scale, other people's access points are looked for
+  up to twice the plan's size past its edges, and the level at 1 m is held to what a real
+  transmitter can manage, so flat readings can't explain a far-off radio as an impossibly loud
+  one. One placed off the plan is drawn where it is, with a dashed line to the plan's edge and
+  its distance and direction (by the compass, and with coordinates, once the plan is on a map).
+  The networks to survey are kept to the property. A fit that runs to the end of the search is
+  shown in the middle of where it was heard instead, marked as such.
 
 ## Saving, recovery, and the Windows app
 

@@ -14,6 +14,7 @@ import numpy as np
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from ..core import rangechoice, recording
+from ..core.colours import WATERFALL_COLOURS, WATERFALL_HIGH, WATERFALL_LOW, WATERFALL_STOPS
 from ..core.rangechoice import (  # noqa: F401  (the page's names for them)
     CELLULAR_SET, MIN_SPAN_MHZ, OVERVIEWS, RANGES, WIFI_SET, band_sets, range_key,
 )
@@ -39,11 +40,6 @@ TOP_DBM, BOTTOM_DBM = -20.0, -110.0
 LEFT, RIGHT, TOP, BOTTOM = 50, 10, 46, 30
 AXIS_LABEL_GAP = 14        # pixels kept clear between frequency labels across the top
 WATERFALL_ROWS = 150       # how far back the waterfall goes, in updates of each range
-WATERFALL_LOW, WATERFALL_HIGH = -110.0, -40.0
-# Quiet to strong: dark blue, blue, cyan, yellow, red
-WATERFALL_STOPS = np.array([0.0, 0.3, 0.55, 0.78, 1.0])
-WATERFALL_COLOURS = np.array([[12, 16, 40], [25, 70, 170], [30, 190, 210], [250, 215, 45],
-                              [235, 55, 40]], dtype=float)
 FIRST_SWEEP_WAIT = 10      # seconds a single range waits for its first sweep before going to pieces
 # More ranges than this and the page lists them, quiet ones folded away, rather than drawing a
 # panel each too small to read; a tapped range is drawn full size

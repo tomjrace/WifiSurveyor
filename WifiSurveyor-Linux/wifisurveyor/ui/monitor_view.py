@@ -22,7 +22,7 @@ import cairo
 import numpy as np
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
-from ..core import library, outage
+from ..core import library, outage, watchreport
 from ..core.colours import ssid_colour
 from ..net import connectivity, monitor as monitor_mode, wifi
 from ..net.ssidmonitor import (HOLDER, WIFI_STAGES, SsidMonitor, Target, band_name,
@@ -31,6 +31,7 @@ from ..net.ssidmonitor import (HOLDER, WIFI_STAGES, SsidMonitor, Target, band_na
 from .common import fit_dropdown, labelled, run_in_thread, scrolled, selected_text, set_strings, \
     status_label, toolbar
 from .spectrum_view import _waterfall_image
+from .watch_to_survey import WatchToSurvey
 
 INTERVALS = (("Check every 1 s", 1.0), ("Check every 2 s", 2.0), ("Check every 5 s", 5.0))
 SWEEP_BEATS = 10              # beats across the traces when the session starts
@@ -250,6 +251,7 @@ def busy_columns(t, airtime, a: float, spp: float, width: int, end: float):
 class MonitorView(Gtk.Box):
     def __init__(self, session) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self._spectra: dict[int, tuple] = {}     # watcher id -> (sweeps seen, spectrum_rows)
         self.session = session
         self.monitor: SsidMonitor | None = None       # the radio shown, while watching
         self.finished: SsidMonitor | None = None      # the last session, still shown after Stop
@@ -375,6 +377,15 @@ class MonitorView(Gtk.Box):
         self.export.connect("clicked", self._export)
         self.open_folder = Gtk.Button(label="Open session folder", sensitive=False)
         self.open_folder.connect("clicked", self._open_folder)
+        self.report = Gtk.Button(label="Save report…", sensitive=False,
+                                 tooltip_text="This watch as a report of its own")
+        self.report.connect("clicked", self._save_report)
+        self.to_survey = Gtk.Button(label="Add to survey", sensitive=False,
+                                    tooltip_text="Put this watch on the open survey's plan, "
+                                                 "where you watched from, and in its report")
+        self.to_survey.connect("clicked", self._add_to_survey)
+        heading.append(self.report)
+        heading.append(self.to_survey)
         heading.append(self.export)
         heading.append(self.open_folder)
         body.append(heading)
@@ -387,6 +398,12 @@ class MonitorView(Gtk.Box):
                   "with its most likely cause.", wrap=True, margin_top=18, margin_bottom=18,
             margin_start=12, margin_end=12, css_classes=["dim-label"]))
         body.append(self.incidents)
+        self.earlier_title = Gtk.Label(label="Earlier watches", xalign=0, css_classes=["heading"],
+                                       margin_top=12, visible=False)
+        body.append(self.earlier_title)
+        self.earlier = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE,
+                                   css_classes=["boxed-list"], visible=False)
+        body.append(self.earlier)
         self.append(scrolled(body))
 
         session.on("explorer", lambda *_: self._fill_analyzers())
@@ -395,6 +412,7 @@ class MonitorView(Gtk.Box):
         self._fill_adapters()
         self._fill_analyzers()
         self._fill_networks()
+        self._fill_earlier()
         GLib.timeout_add(1000, self._refresh)
 
     def _panel(self) -> Gtk.DrawingArea:
@@ -568,7 +586,7 @@ class MonitorView(Gtk.Box):
             return
         current = self._chosen()
         named = [r for r in readings if r.ssid]
-        named.sort(key=lambda r: (r.ssid.lower(), -r.rssi))
+        named.sort(key=lambda r: (-r.rssi, r.ssid.lower()))     # the strongest first
         self.readings = named
         self.all_readings = list(readings)
         labels = [f"{r.ssid} · {r.bssid.upper()} · ch {r.channel} ({r.band} GHz) · {r.rssi} dBm"
@@ -775,6 +793,8 @@ class MonitorView(Gtk.Box):
                 control.set_sensitive(False)
             self.export.set_sensitive(True)
             self.open_folder.set_sensitive(True)
+            self.report.set_sensitive(True)
+            self.to_survey.set_sensitive(True)
             self._begin_view()
             self._tick_id = self.vitals.add_tick_callback(self._tick)
             if trouble:
@@ -837,9 +857,17 @@ class MonitorView(Gtk.Box):
         def work():
             for watcher in watchers:
                 watcher.stop()
+            # Over: its log shrinks to what's worth keeping (outage.compact)
+            for watcher in watchers:
+                if watcher.log is not None:
+                    try:
+                        outage.compact(watcher.log.path)
+                    except (OSError, ValueError):
+                        pass                  # left as it is; the next start tries again
 
         def done(*_args) -> None:
             self.button.set_sensitive(True)
+            self._fill_earlier()
             for control in self.controls:
                 control.set_sensitive(True)
             folders = [str(w.log.folder) for w in watchers if w.log]
@@ -1099,6 +1127,118 @@ class MonitorView(Gtk.Box):
 
         dialog.save(self.get_root(), None, chosen)
 
+    def _watch_summary(self) -> dict | None:
+        """This session, as core.watchreport summarises it from its logs (one per band)."""
+        logs = [outage.session_file(w.log.folder) for w in self._shown() if w.log is not None]
+        logs = [log for log in logs if log is not None]
+        return watchreport.summary(logs) if logs else None
+
+    def _save_report(self, *_args) -> None:
+        watch = self._watch_summary()
+        if watch is not None:
+            self.save_report(watch)
+
+    def save_report(self, watch: dict) -> None:
+        """A watch as a report of its own: saved where you choose, then opened."""
+        dialog = Gtk.FileDialog(
+            title="Save the watch report",
+            initial_name=f"{watch['ssid'] or 'hidden'} watch "
+                         f"{time.strftime('%Y-%m-%d %H.%M', time.localtime(watch['start']))}.html")
+        try:
+            folder = library.documents_dir()
+            if folder.is_dir():
+                dialog.set_initial_folder(Gio.File.new_for_path(str(folder)))
+        except Exception:
+            pass
+
+        def chosen(dialog, result) -> None:
+            try:
+                path = dialog.save_finish(result).get_path()
+            except GLib.Error:
+                return
+            try:
+                from .. import __version__
+                from ..core.project import hand_back
+
+                Path(path).write_text(watchreport.build_html(watch, __version__), encoding="utf-8")
+                hand_back(path)
+            except OSError as error:
+                self.status.set_text(f"Couldn't save: {error}")
+                return
+            self.status.set_text(f"Saved the watch report to {path}")
+            Gtk.FileLauncher(file=Gio.File.new_for_path(path)).launch(self.get_root(), None, None)
+
+        dialog.save(self.get_root(), None, chosen)
+
+    def _add_to_survey(self, *_args) -> None:
+        watch = self._watch_summary()
+        if watch is not None:
+            self.add_to_survey(watch)
+
+    def add_to_survey(self, watch: dict) -> None:
+        """Puts a watch on a survey: the open one, a recent one, or one you pick."""
+        watch = {k: v for k, v in watch.items() if k != "logs"}    # this computer's paths only
+        WatchToSurvey(self.session, self.get_root(), watch).present(self.get_root())
+
+    def _fill_earlier(self) -> None:
+        """The watches saved before, newest first: each can be reported, added to a survey or deleted."""
+        running = {str(w.log.folder) for w in self.watchers if w.log is not None} \
+            if self.monitor is not None else set()
+
+        def done(watches, error) -> None:
+            while (row := self.earlier.get_row_at_index(0)) is not None:
+                self.earlier.remove(row)
+            for watch in watches or []:
+                self.earlier.append(self._earlier_row(watch))
+            self.earlier_title.set_visible(bool(watches))
+            self.earlier.set_visible(bool(watches))
+
+        run_in_thread(lambda: watchreport.earlier(skip=running), done)
+
+    def _earlier_row(self, watch: dict) -> Gtk.Widget:
+        bands = ", ".join(b["band"] for b in watch["bands"] if b["band"])
+        row = Adw.ActionRow(
+            title=GLib.markup_escape_text(
+                f"{watch['ssid'] or '(hidden)'} · "
+                + time.strftime("%d %b %H:%M", time.localtime(watch["start"]))
+                + (f" · {bands}" if bands else "")),
+            subtitle=GLib.markup_escape_text(watchreport.headline(watch)), subtitle_lines=0)
+        report = Gtk.Button(label="Report…", valign=Gtk.Align.CENTER)
+        report.connect("clicked", lambda *_: self.save_report(watch))
+        to_survey = Gtk.Button(label="Add to survey", valign=Gtk.Align.CENTER)
+        to_survey.connect("clicked", lambda *_: self.add_to_survey(watch))
+        delete = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
+                            tooltip_text="Delete this watch's logs and captures",
+                            css_classes=["flat"])
+        delete.connect("clicked", lambda *_: self._delete_earlier(watch))
+        for button in (report, to_survey, delete):
+            row.add_suffix(button)
+        return row
+
+    def _delete_earlier(self, watch: dict) -> None:
+        folders = sorted({str(Path(log).parent) for log in watch.get("logs", [])})
+        size = sum(f.stat().st_size for folder in folders for f in Path(folder).iterdir()
+                   if f.is_file())
+        dialog = Adw.AlertDialog(
+            heading=f"Delete the watch of {watch['ssid'] or 'the hidden network'}?",
+            body=f"{watchreport.headline(watch)}. Its logs and frame captures "
+                 f"({size / 1e6:.1f} MB) are deleted. A survey it was added to keeps its summary.")
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("delete", "Delete")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def answered(_dialog, response: str) -> None:
+            if response != "delete":
+                return
+            import shutil
+
+            for folder in folders:
+                shutil.rmtree(folder, ignore_errors=True)
+            self._fill_earlier()
+
+        dialog.connect("response", answered)
+        dialog.present(self.get_root())
+
     def _open_folder(self, *_args) -> None:
         logs = [w.log for w in self._shown() if w.log is not None]
         if not logs:
@@ -1342,7 +1482,11 @@ class MonitorView(Gtk.Box):
         self._waves[area] = (0, banner, waves_w, waves_h, a, b)
         # Redrawn as often as the trace moves a pixel, 20 times a second at most
         self._every = max(0.05, min(1.0, spp))
-        lane = waves_h / 4
+        # With an analyzer, a fifth lane: the channel's spectrum on the same time axis
+        spectrum = self._spectrum_of(watcher) if watcher.analyzer is not None or watcher.traces \
+            else None
+        lane_count = 5 if watcher.analyzer is not None or spectrum else 4
+        lane = waves_h / lane_count
         busy_colour = ssid_colour(watcher.target.ssid)
         load_scale, load_hint = self._load_scale(watcher, history, a, b)
         names = (("CONNECTION", GREEN, "taller = quicker internet reply"),
@@ -1350,7 +1494,7 @@ class MonitorView(Gtk.Box):
                  ("CHANNEL BUSY", busy_colour,
                   "line = the AP's own figure" if np.isfinite(history.ap_busy).any() else ""),
                  ("AP LOAD", VIOLET, load_hint))
-        for number in range(4):
+        for number in range(lane_count):
             self._lane_frame(cr, 0, banner + number * lane, waves_w, lane)
         self._draw_axis(cr, 0, banner, waves_w, waves_h, a, b)
 
@@ -1400,6 +1544,9 @@ class MonitorView(Gtk.Box):
                                hint if number < 2 and mode != "envelope" else
                                "average of each moment's checks" if number == 0 else
                                hint if number >= 2 else "")
+        if lane_count == 5:
+            self._draw_spectrum_lane(cr, spectrum, banner + 4 * lane, waves_w, lane, a, spp,
+                                     columns)
         self._label_runs(cr, connection, CODE_COLOURS, banner, waves_w, a, spp, history,
                          trouble_words)
         self._label_runs(cr, beacons, BEACON_COLOURS, banner + lane, waves_w, a, spp, history,
@@ -1414,6 +1561,53 @@ class MonitorView(Gtk.Box):
                              watcher)
         self._draw_tiles(cr, waves_w if wide else 0, banner if wide else banner + waves_h + AXIS,
                          tiles_w, height - banner if wide else tile_rows * 64, watcher, now)
+
+    def _spectrum_of(self, watcher):
+        """
+        The channel's sweeps so far, on one frequency grid (watchreport.spectrum_rows): the
+        minute rows of the long view, then every recent sweep. Worked out again only when a
+        sweep has arrived since.
+        """
+        key = (watcher.channel_count, len(watcher.minutes))
+        cached = self._spectra.get(id(watcher))
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        with watcher.lock:
+            traces = list(watcher.traces)
+            minutes = [m for m in watcher.minutes if m.get("avg")]
+        first = traces[0]["t"] if traces else float("inf")
+        rows = [m for m in minutes if m["t"] < first] + traces       # minutes until sweeps take over
+        found = watchreport.spectrum_rows(rows) if rows else None
+        self._spectra[id(watcher)] = (key, found)
+        return found
+
+    def _draw_spectrum_lane(self, cr, spectrum, top, width, height, a, spp, columns) -> None:
+        """The channel's spectrum as a waterfall lying on its side: time across, frequency up."""
+        if spectrum is None:
+            self._lane_note(cr, 12, top + height / 2, "waiting for the analyzer's first sweep")
+        else:
+            times, matrix, (low, high) = spectrum
+            levels = watchreport.grid_columns(times, matrix, a, spp, columns, stale=75.0)
+            surface, _pixels = _waterfall_image(levels)
+            cr.save()
+            cr.rectangle(0, top, width, height)
+            cr.clip()
+            cr.translate(0, top)
+            cr.scale(width / max(1, columns), height / max(1, levels.shape[0]))
+            cr.set_source_surface(surface, 0, 0)
+            cr.get_source().set_filter(cairo.FILTER_NEAREST)
+            cr.paint()
+            cr.restore()
+            text = f"{low:.0f}–{high:.0f} MHz"
+            cr.set_font_size(10)
+            extent = cr.text_extents(text).x_advance
+            cr.set_source_rgba(*BACKGROUND, 0.75)
+            cr.rectangle(width - extent - 14, top + 2, extent + 10, 14)
+            cr.fill()
+            cr.set_source_rgb(*TEXT)
+            cr.move_to(width - extent - 9, top + 13)
+            cr.show_text(text)
+        self._lane_heading(cr, 0, top, "SPECTRUM", TEXT, "quiet blue to strong red")
 
     def _load_scale(self, watcher, history, a: float, b: float) -> tuple[float, str]:
         """The AP LOAD lane's top, in clients (5 at least), and what its trace counts."""

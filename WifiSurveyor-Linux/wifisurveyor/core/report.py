@@ -14,7 +14,8 @@ from collections.abc import Callable
 from html import escape
 from pathlib import Path
 
-from . import advice, analysis, hidden, history as site_history, library, overview, planning, rfplan
+from . import (advice, analysis, hidden, history as site_history, library, overview, planning, rfplan,
+               watchreport)
 from .colours import hex_colour, quality_colour, signal_quality, ssid_colour
 from ..rf import bands as rfbands
 from ..rf import cellular, iq
@@ -73,6 +74,9 @@ tr.now td { font-weight: 600; background: #F8FAFC; }
        box-shadow: 0 1px 3px rgba(0,0,0,.5); color: #fff; font: 700 12px/18px system-ui, sans-serif;
        text-align: center; text-decoration: none; }
 .pin.fair { color: #422006; }
+.pin.watchpin { border-radius: 5px; }
+.timeline { overflow-x: auto; margin: 8px 0 16px; }
+.timeline img { display: block; max-width: none; }
 .pin:hover { transform: translate(-50%, -50%) scale(1.25); z-index: 2; }
 .scalebar { position: absolute; left: 12px; bottom: 12px; background: rgba(255,255,255,.9);
             padding: 2px 6px 4px; border-radius: 4px; font-size: 12px; }
@@ -335,7 +339,7 @@ def _facts(point, ctx, ssid, band) -> str:
     if others is not None:
         parts.append(f"<span><b>Sharing the channel</b> "
                      f"{_graded(len(others), 0, 2, False, str(len(others)))}</span>")
-    result = point.connectivity or {}
+    result = point.check_for(ssid or (best or {}).get("ssid")) or point.check_for(None) or {}
     latency, loss = result.get("latency_ms"), result.get("loss")
     if latency is not None:
         parts.append(f"<span><b>Latency</b> {_graded(latency, 10, 30, False, f'{latency:.0f} ms')}</span>")
@@ -407,10 +411,14 @@ def build_html(project, map_png: bytes | None,
     ctx = analysis.Context(project, profile=profile)
     target = ctx.profile.primary
     points = project.points
-    verdicts = [analysis.diagnose(point, ctx, ssid, band=band) for point in points]
-    judged = [analysis.requirement(point, ctx, ssid, band) for point in points]
+    # With no one network chosen, each point is judged for the strongest of the focus networks
+    each = [ssid or analysis.focus_here(project, point) for point in points]
+    verdicts = [analysis.diagnose(point, ctx, name, band=band) for point, name in zip(points, each)]
+    judged = [analysis.requirement(point, ctx, name, band) for point, name in zip(points, each)]
     sites = analysis.ap_sites(project, ssid, band)
-    todo = [advice.improvements(point, ctx, ssid, band, sites) for point in points]
+    todo = [advice.improvements(point, ctx, name, band, sites) for point, name in zip(points, each)]
+    judged_for = ssid or (f"the strongest of {', '.join(project.focus_networks)} at each point"
+                          if project.focus_networks else "the strongest network at each point")
     grades = [advice.quality(found) for found in todo]
     themes = overview.build(project, ctx, ssid, band, todo, sites, allow_dfs)
     links = not overview_only
@@ -433,6 +441,15 @@ def build_html(project, map_png: bytes | None,
                          f"title=\"Point {number}: {QUALITY_WORDS[grade]}\" "
                          f"style=\"{pin_style(point)};background:{_colour(quality_colour(grade))}\">"
                          f"{number}</{tag}>")
+        # Where each network was watched from, numbered W1, W2… like their sections
+        for number, watch in enumerate(project.watches, start=1):
+            if watch.get("x") is None:
+                continue
+            grade = watchreport.availability_class(_worst_availability(watch))
+            parts.append(f"<a class=\"pin watchpin {grade}\" href=\"#watch-{number}\" "
+                         f"title=\"{escape(watchreport.headline(watch))}\" "
+                         f"style=\"left:{watch['x'] / width * 100:.2f}%;top:{watch['y'] / height * 100:.2f}%;"
+                         f"background:{_colour(quality_colour(grade))}\">W{number}</a>")
         parts.append(_scale_bar(project))
         parts.append("</div>")
         return "".join(parts)
@@ -453,7 +470,7 @@ def build_html(project, map_png: bytes | None,
         _cover(details or {}),
         f"<h1>{escape(project.name)}</h1>",
         f"<p class=\"muted\">{len(points)} measurement points · {with_spectrum} with "
-        f"spectrum · judged for {escape(ssid or 'the strongest network at each point')}"
+        f"spectrum · judged for {escape(judged_for)}"
         f"{'' if band == 'All' else f' on {band} GHz'} against the {escape(ctx.profile.name)} "
         f"requirement"
         + (f", allowing {ctx.allowance:g} dB for phones" if ctx.allowance else "")
@@ -540,6 +557,8 @@ def build_html(project, map_png: bytes | None,
                    key=lambda name: (name != ssid, -sum(1 for p in points
                                                         if any(n["ssid"] == name for n in p.networks)),
                                      name))
+    html.append(_surveyed(project, target, band))
+    html.append(_watched(project))
     if names:
         html.append("<h2>Networks</h2>")
         html.append(f"<p class=\"muted\">Each network keeps its colour throughout: on the map's "
@@ -590,7 +609,7 @@ def build_html(project, map_png: bytes | None,
         passing = sum(counted)
         html.append(f"<h2>{escape(ctx.profile.name)} requirement</h2>")
         html.append(f"<p><b>{passing} of {len(counted)} points ({passing / len(counted) * 100:.0f}%) "
-                    f"meet it</b> for {escape(ssid or 'the strongest network at each point')}"
+                    f"meet it</b> for {escape(judged_for)}"
                     f"{'' if band == 'All' else f' on {band} GHz'}. It asks for a signal of "
                     f"{ctx.profile.primary:.0f} dBm or better"
                     + (f", a second access point at {ctx.profile.secondary:.0f} dBm or better"
@@ -678,20 +697,25 @@ def build_html(project, map_png: bytes | None,
 
     html.append(_hidden_networks(project))
 
-    if ssid:
-        plan = rfplan.channel_plan(project, ssid, allow_dfs)
-        if plan:
-            html.append(f"<h2>Suggested channel plan for {escape(ssid)}</h2>")
-            html.append("<p class=\"muted\">Keeps the network's own radios off each other's "
-                        f"channels first, then away from other networks{'' if allow_dfs else ', without DFS channels'}.</p>")
-            html.append("<table><tr><th>Radio</th><th>Now</th><th>Suggested</th>"
-                        "<th class=\"num\">Shares a channel with, now → after</th></tr>")
-            for item in plan:
-                macs = ", ".join(sorted(b.upper() for b in item.radio.bssids)[:2])
-                html.append(f"<tr><td>{escape(macs)}</td><td>{escape(item.current)}</td>"
-                            f"<td>{escape(item.suggested if item.changed else 'keep')}</td>"
-                            f"<td class=\"num\">{item.shared_before} → {item.shared_after}</td></tr>")
-            html.append("</table>")
+    # With no network chosen, the site's main networks: the points' advice refers to them
+    ours = [ssid] if ssid else overview.main_networks(project)
+    for name, also, plan in rfplan.plans(project, ours, allow_dfs):
+        html.append(f"<h2>Suggested channel plan for {escape(name)}"
+                    + (f" (and {escape(', '.join(also))})" if also else "") + "</h2>")
+        html.append("<p class=\"muted\">Keeps the network's own radios off each other's "
+                    f"channels first, then away from other networks{'' if allow_dfs else ', without DFS channels'}. "
+                    "Shares is how many of the network's other radios are heard on the same "
+                    "channel where this one is.</p>")
+        html.append("<table><tr><th>Radio</th><th>Networks</th><th>Now</th><th>Suggested</th>"
+                    "<th class=\"num\">Shares a channel with, now → after</th></tr>")
+        for item in plan:
+            macs = ", ".join(sorted(b.upper() for b in item.radio.bssids)[:2])
+            html.append(f"<tr><td>{escape(macs)}</td>"
+                        f"<td>{escape(', '.join(sorted(item.radio.ssids)) or '(hidden)')}</td>"
+                        f"<td>{escape(item.current)}</td>"
+                        f"<td>{escape(item.suggested if item.changed else 'keep')}</td>"
+                        f"<td class=\"num\">{item.shared_before} → {item.shared_after}</td></tr>")
+        html.append("</table>")
 
     # ----- each point -----
     html.append("<h2>Points</h2>")
@@ -719,7 +743,7 @@ def build_html(project, map_png: bytes | None,
         if ok is not None:
             html.append(f"<p>{'Meets' if ok else 'Fails'} {escape(ctx.profile.name)}"
                         + ("" if ok else ": " + escape("; ".join(failed))) + ".</p>")
-        html.append(_facts(point, ctx, ssid, band))
+        html.append(_facts(point, ctx, each[number - 1], band))
         html.append("</div>")
         if map_png:
             html.append(f"<div class=\"locator\" style=\"aspect-ratio:{width}/{height}\" "
@@ -728,16 +752,19 @@ def build_html(project, map_png: bytes | None,
         html.append("</div>")
         found = todo[number - 1]
         html.append("<h4>What could be improved here</h4>")
-        html.append(_todo(found) if found else _margins(point, ctx, ssid, band))
+        html.append(_todo(found) if found else _margins(point, ctx, each[number - 1], band))
         html.append(_sweeps(point, number, spectrum_png, range_png, band_png))
         html.append("<h4>Access points heard</h4>")
         html.append(_networks_table(point, target))
         html.append(_dwell_table(point))
         html.append(_iq_table(point))
-        if point.connectivity:
-            from ..net import connectivity
+        from ..net import connectivity
 
-            html.append(f"<p>{escape(connectivity.describe(point.connectivity))}</p>")
+        for result in point.checks or ([point.connectivity] if point.connectivity else []):
+            text = (f"{result['ssid']}: not joined, {result['skipped']}" if result.get("skipped")
+                    else (f"{result['ssid']}: " if point.checks and result.get("ssid") else "")
+                    + connectivity.describe(result))
+            html.append(f"<p>{escape(text)}</p>")
         for note in point.notes:
             html.append(f"<p class=\"note\">{escape(note)}</p>")
         html.append("</details></section>")
@@ -953,6 +980,71 @@ def _planned(project, ctx, ssid, band, sites) -> str:
     return "\n".join(html)
 
 
+def _surveyed(project, target: float, band: str) -> str:
+    """
+    The focus networks side by side: how much of the site each covers, and whether the
+    adapter could join it and use it at the points that hear it.
+    """
+    focus = list(project.focus_networks or [])
+    if not focus:
+        return ""
+    points = project.points
+    html = ["<h2 id=\"surveyed\">Networks surveyed</h2>",
+            "<p class=\"muted\">The networks this survey is about. Each was joined and checked at "
+            "every point that heard it. Meets target is the share of all points where its "
+            f"strongest access point reaches {target:.0f} dBm.</p>",
+            "<table><tr><th>Network</th><th class=\"num\">Heard at</th>"
+            "<th class=\"num\">Meets target</th><th class=\"num\">Median signal</th>"
+            "<th class=\"num\">Checks working</th><th class=\"num\">Median latency</th>"
+            "<th class=\"num\">Median download</th><th>Problems</th></tr>"]
+    for name in focus:
+        best = [p.best(name, None, band) for p in points]
+        levels = [b["rssi"] for b in best if b]
+        meets = sum(1 for level in levels if level >= target)
+        checks = [c for p in points for c in p.checks_made() if c.get("ssid") == name]
+        working = [c for c in checks if not c.get("error")]
+        latency = [c["latency_ms"] for c in working if c.get("latency_ms") is not None]
+        downs = [r["down_mbps"] for p in points for r in [p.throughput or {}, *p.throughputs]
+                 if r.get("ssid") == name and r.get("down_mbps") is not None]
+        problems = Counter(c["error"] for c in checks if c.get("error"))
+        share = meets / len(points) if points else 0
+        colour = "good" if share >= 0.9 else "fair" if share >= 0.7 else "poor"
+        html.append(
+            f"<tr><td>{_ssid(name)}</td><td class=\"num\">{len(levels)} of {len(points)}</td>"
+            f"<td class=\"num\"><span class=\"q q-{colour}\">{share * 100:.0f}%</span></td>"
+            f"<td class=\"num\">{_signal(statistics.median_low(levels), target) if levels else '—'}</td>"
+            f"<td class=\"num\">{f'{len(working)} of {len(checks)}' if checks else 'not checked'}</td>"
+            f"<td class=\"num\">{f'{statistics.median(latency):.0f} ms' if latency else '—'}</td>"
+            f"<td class=\"num\">{f'{statistics.median(downs):.0f} Mbps' if downs else '—'}</td>"
+            f"<td>{escape('; '.join(f'{text} ({count}×)' for text, count in problems.most_common(3)))}</td></tr>")
+    html.append("</table>")
+    return "\n".join(html)
+
+
+def _worst_availability(watch: dict) -> float | None:
+    return min((b["availability"] for b in watch.get("bands", []) if b.get("availability") is not None),
+               default=None)
+
+
+def _watched(project) -> str:
+    """The Watch-tab sessions added to this survey: where from, how available, every dropout."""
+    if not project.watches:
+        return ""
+    html = ["<h2 id=\"watched\">Networks watched</h2>",
+            "<p class=\"muted\">Networks watched for a while from one spot (the W pins on the "
+            "map), catching every dropout with its most likely cause. Up is the share of the "
+            "watched time the network was usable.</p>"]
+    for number, watch in enumerate(project.watches, start=1):
+        where = ""
+        if watch.get("x") is not None and project.points:
+            nearest = min(range(len(project.points)),
+                          key=lambda i: (project.points[i].x - watch["x"]) ** 2
+                          + (project.points[i].y - watch["y"]) ** 2)
+            where = f"watched from near point {nearest + 1}"
+        html.append(watchreport.section(watch, number, where))
+    return "\n".join(html)
+
+
 def _comparison(extra: dict, map_block) -> str:
     compared = extra.get("compared") or []
     if not compared:
@@ -1021,12 +1113,20 @@ def _inventory(project, ctx, sites, chip, ssid, band) -> str:
                   "middle of where it was heard; its signal changes too little to place it"
                   if site.get("unfitted") else
                   "near the point where it was strongest" if site.get("guess") else
+                  "off the plan" + (", rough" if site["rough"] else "") if site.get("beyond") else
                   "outside the plan" if site["outside"]
                   else "estimated, rough" if site["rough"] else "estimated")
+        beyond = site.get("beyond") if not site.get("placed") else None
         across, down = project.feet(site["x"]), project.feet(site["y"])
-        where = (f"{across:.0f} ft across, {down:.0f} ft down" if across is not None
-                 else f"{site['x'] / max(1, project.width) * 100:.0f}% across, "
-                      f"{site['y'] / max(1, project.height) * 100:.0f}% down")
+        if beyond:
+            where = ((f"about {beyond['feet']:.0f} ft " if beyond.get("feet") is not None else "")
+                     + escape(beyond["way"]))
+        else:
+            where = (f"{across:.0f} ft across, {down:.0f} ft down" if across is not None
+                     else f"{site['x'] / max(1, project.width) * 100:.0f}% across, "
+                          f"{site['y'] / max(1, project.height) * 100:.0f}% down")
+        if site.get("lat_lon") and not site.get("guess"):
+            where += "<br><span class=\"muted\">{:.5f}, {:.5f}</span>".format(*site["lat_lon"])
         html.append(f"<tr><td>{index + 1}</td><td><b>{escape(site.get('name') or 'Unnamed')}</b>"
                     f"<div class=\"muted\">{status}</div></td>"
                     f"<td>{'<br>'.join(radios) or escape(', '.join(n for n, _b in site['networks']))}</td>"
@@ -1175,7 +1275,8 @@ def _method(project, ctx, version: str) -> str:
               "to make devices reconnect"))
     if project.rf_calibration and project.rf_calibration.get("offset_db") is not None:
         rows.append(("Analyzer calibration", f"{project.rf_calibration['offset_db']:+.1f} dB against the adapter"))
-    rows.append(("Connection checks", f"{sum(1 for p in points if p.connectivity and 'latency_ms' in p.connectivity)} points"))
+    rows.append(("Connection checks", f"{sum(1 for p in points if any('latency_ms' in c for c in p.checks_made()))} points"
+                 + (f", on {', '.join(project.focus_networks)}" if project.focus_networks else "")))
     rows.append(("Throughput tests", f"{sum(1 for p in points if any(r.get('down_mbps') is not None for r in [p.throughput or {}, *p.throughputs]))} points"))
     rows.append(("Requirement", f"{ctx.profile.name}"
                  + (f", with {ctx.allowance:g} dB allowed for phones" if ctx.allowance else "")))

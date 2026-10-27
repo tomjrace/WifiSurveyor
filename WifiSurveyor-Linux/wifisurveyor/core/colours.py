@@ -7,6 +7,14 @@ from __future__ import annotations
 
 import colorsys
 
+import numpy as np
+
+# Waterfalls, wherever they're drawn: quiet to strong, dark blue, blue, cyan, yellow, red
+WATERFALL_LOW, WATERFALL_HIGH = -110.0, -40.0
+WATERFALL_STOPS = np.array([0.0, 0.3, 0.55, 0.78, 1.0])
+WATERFALL_COLOURS = np.array([[12, 16, 40], [25, 70, 170], [30, 190, 210], [250, 215, 45],
+                              [235, 55, 40]], dtype=float)
+
 # Bright enough for the dark spectrum plots and chosen to stay clear of the trace's yellow and
 # the peak's red. Past the end of the list, further colours are spread round the hue circle.
 SSID_COLOURS = [

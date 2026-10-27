@@ -27,6 +27,9 @@ from ..core.outage import ChannelLog, Deauth
 from . import monitor
 
 LOOKBACK = 30.0
+# An incident's capture keeps the first this many seconds of the outage, then pauses, and at the
+# end adds the last LOOKBACK seconds: the drop and the recovery, without hours of frames between
+CAPTURE_DURING = 120.0
 
 
 def _elements(packet, Dot11Elt) -> dict[int, bytes]:
@@ -211,6 +214,8 @@ class BeaconWatch:
         self._recent: deque = deque()
         self._writer = None
         self._writer_lock = threading.Lock()
+        self._writer_until = 0.0                # frames after this wait for end_capture
+        self._paused = False
         self._layers = None
 
     def start(self) -> None:
@@ -266,6 +271,8 @@ class BeaconWatch:
             make_dir(Path(path).parent)
             self._writer = PcapWriter(str(path), linktype=127, sync=True)
             self._writer_path = Path(path)
+            self._writer_until = time.time() + CAPTURE_DURING
+            self._paused = False
             for packet in list(self._recent):
                 self._writer.write(packet)
 
@@ -276,6 +283,10 @@ class BeaconWatch:
             if self._writer is None:
                 return
             try:
+                if self._paused:
+                    # The recovery: the frames of the last LOOKBACK seconds, after a gap
+                    for packet in list(self._recent):
+                        self._writer.write(packet)
                 self._writer.close()
             finally:
                 self._writer = None
@@ -295,8 +306,11 @@ class BeaconWatch:
         while self._recent and float(getattr(self._recent[0], "time", now)) < now - LOOKBACK:
             self._recent.popleft()
         with self._writer_lock:
-            if self._writer is not None:
-                try:
-                    self._writer.write(packet)
-                except Exception:
-                    pass
+            if self._writer is not None and not self._paused:
+                if now > self._writer_until:
+                    self._paused = True     # a long outage: the rest waits for its recovery
+                else:
+                    try:
+                        self._writer.write(packet)
+                    except Exception:
+                        pass

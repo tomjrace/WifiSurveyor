@@ -16,7 +16,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from . import __version__  # noqa: E402
-from .core import hidden, library, report, settings  # noqa: E402
+from .core import hidden, library, outage, report, settings, watchreport  # noqa: E402
 from .core.project import (  # noqa: E402
     Project, clear_recovery, hand_back, in_root_home, read_recovery, write_recovery,
 )
@@ -48,6 +48,8 @@ class Session:
     """What the views share: the open survey, the GPS, and the analyzer."""
 
     def __init__(self) -> None:
+        # A watch waiting for the survey being opened for it: {"path", "watch"} (ui.watch_to_survey)
+        self.pending_watch: dict | None = None
         self.project = Project()
         self.gps = gps.GpsSource()
         # The analyzer the live views sweep with: a serial one or a HackRF (see _choose). A
@@ -378,10 +380,16 @@ class Window(Adw.ApplicationWindow):
         menu.append("Export overview…", "win.export-overview")
         menu.append("Report details…", "win.report-details")
         menu.append("Compare with another survey…", "win.compare")
+        menu.append("Add a saved watch to this survey…", "win.add-watch")
         if os.geteuid() != 0:
             menu.append("Relaunch as root", "win.root")
         menu.append("About", "win.about")
         header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu))
+        if os.geteuid() != 0:
+            header.pack_start(Gtk.Button(
+                child=Adw.ButtonContent(icon_name="dialog-password-symbolic", label="Relaunch as root"),
+                css_classes=["root-button"], action_name="win.root",
+                tooltip_text="Monitor mode, captures and passive scans need root"))
 
         # The tabs live in the header. Only a narrow window moves them to the bottom, where
         # they'd otherwise cost a row of the map's height for nothing.
@@ -426,6 +434,7 @@ class Window(Adw.ApplicationWindow):
             ("report-details", self.on_report_details),
             ("compare", self.on_compare),
             ("about", self.on_about), ("root", self.on_root),
+            ("add-watch", self.on_add_watch),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", handler)
@@ -436,6 +445,10 @@ class Window(Adw.ApplicationWindow):
         application.set_accels_for_action("win.fullscreen", ["F11"])
 
         self.session.on("changed", self._update_title)
+        # A watch being added to the survey is placed on its plan: show it
+        self.session.on("add-watch", lambda *_: self.stack.set_visible_child_name("survey"))
+        # Watches that ended (or ended in a crash) since the last start: shrunk to what's worth keeping
+        run_in_thread(outage.compact_finished, lambda *_: None)
         self.session.on("project", self._update_title)
         self.connect("close-request", self._on_close_request)
 
@@ -527,6 +540,32 @@ class Window(Adw.ApplicationWindow):
             self.toast(f"Opened {len(project.points)} points from {Path(path).name}.{note}")
 
         self.confirm_discard(go)
+
+    def on_add_watch(self, *_args) -> None:
+        """An earlier Watch-tab session (its folder) into the open survey."""
+        dialog = Gtk.FileDialog(title="Choose the watch session's folder")
+        try:
+            dialog.set_initial_folder(Gio.File.new_for_path(str(outage.folder())))
+        except Exception:
+            pass
+
+        def chosen(dialog: Gtk.FileDialog, result) -> None:
+            try:
+                folder = Path(dialog.select_folder_finish(result).get_path())
+            except GLib.Error:
+                return
+            log = outage.session_file(folder)
+            if log is None:
+                self.toast("That folder isn't a watch session: it has no session log.")
+                return
+            try:
+                watch = watchreport.summary(watchreport.partners(log))
+            except (OSError, ValueError) as error:
+                self.toast(f"Couldn't read the session: {error}")
+                return
+            self.session.emit("add-watch", watch)
+
+        dialog.select_folder(self, None, chosen)
 
     def watch_network(self) -> None:
         """The Watch page, from the start screen: a new survey isn't needed for it."""
@@ -1008,6 +1047,21 @@ class StartDialog(Adw.Dialog):
         header.pack_end(other)
 
         page = Adw.PreferencesPage()
+        if not wifi.is_root():
+            # Watching with a monitor adapter, captures and passive scans all need it
+            group = Adw.PreferencesGroup()
+            root = Gtk.Button(child=Adw.ButtonContent(icon_name="dialog-password-symbolic",
+                                                      label="Relaunch as root"),
+                              css_classes=["pill", "root-button", "big"], halign=Gtk.Align.CENTER)
+            root.connect("clicked", lambda *_: (self.close(), window.on_root()))
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            box.append(root)
+            box.append(Gtk.Label(label="Needed for monitor mode: listening on the channel while "
+                                       "watching, capturing frames, and passive scans.",
+                                 wrap=True, justify=Gtk.Justification.CENTER,
+                                 css_classes=["dim-label"]))
+            group.add(box)
+            page.add(group)
         group = Adw.PreferencesGroup(title="Start")
         for icon, title, subtitle, action in (
                 ("mark-location-symbolic", "New survey",
@@ -1021,16 +1075,6 @@ class StartDialog(Adw.Dialog):
             row.add_prefix(Gtk.Image(icon_name=icon, pixel_size=32))
             row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
             row.connect("activated", lambda _row, go=action: (self.close(), go()))
-            group.add(row)
-        if not wifi.is_root():
-            # Watching with a monitor adapter, captures and passive scans all need it
-            row = Adw.ActionRow(title="Relaunch as root",
-                                subtitle="Needed for monitor mode: listening on the channel while "
-                                         "watching, capturing frames, and passive scans.",
-                                activatable=True, subtitle_lines=0)
-            row.add_prefix(Gtk.Image(icon_name="dialog-password-symbolic", pixel_size=32))
-            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
-            row.connect("activated", lambda _row: (self.close(), window.on_root()))
             group.add(row)
         page.add(group)
         if recovery:

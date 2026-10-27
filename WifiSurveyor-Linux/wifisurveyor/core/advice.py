@@ -433,33 +433,40 @@ def _security(best, add) -> None:
 
 def _general(point, ctx, add) -> None:
     """What isn't about the serving network: the connection, the data, and the survey itself."""
-    result = point.connectivity or {}
-    if "isn't connected" in (result.get("error") or ""):
-        result = {}                   # the adapter wasn't joined: a gap in the data, not a fault
-    if result.get("error"):
-        add("High", "Connection failed", f"Connection check: {result['error']}.",
-            "Check the adapter can associate here and that DHCP and the gateway answer.")
-    else:
+    # The adapter not being joined is a gap in the data, not a fault
+    checks = [c for c in point.checks_made() if "isn't connected" not in (c.get("error") or "")]
+    for result in checks:
+        ssid = result.get("ssid") or ""
+        on = f" on {ssid}" if ssid else ""
+        if result.get("error"):
+            named = ssid + (f" ({result['bssid'].upper()})" if ssid and result.get("bssid") else "")
+            add("High", "Connection failed",
+                f"Connection check{' on ' + named if named else ''}: {result['error']}.",
+                "Check the adapter can associate here and that DHCP and the gateway answer.",
+                network=ssid)
+            continue
         loss = result.get("loss")
         if loss is not None and loss >= 1:
             add("High" if loss >= 5 else "Medium", "Packet loss",
-                f"{loss:.0f}% of pings to the gateway were lost.",
+                f"{loss:.0f}% of pings to the gateway{on} were lost.",
                 "Loss this close to the gateway means retries or interference on the air: "
-                "voice and video will stutter.")
+                "voice and video will stutter.", network=ssid)
         latency = result.get("latency_ms")
         if latency is not None and latency >= 20:
             add("High" if latency >= 50 else "Medium", "High latency",
-                f"Gateway latency averages {latency:.0f} ms.",
+                f"Gateway latency{on} averages {latency:.0f} ms.",
                 "The gateway is a hop away, so this should be under 5–10 ms: the channel is busy "
-                "or frames are being retried.")
+                "or frames are being retried.", network=ssid)
         jitter = result.get("jitter_ms")
         if jitter is not None and jitter >= 10:
-            add("Medium", "Jitter", f"Latency varies by ±{jitter:.0f} ms.",
-                "Jitter above 10 ms hurts calls: usually a busy channel or power-saving clients.")
+            add("Medium", "Jitter", f"Latency{on} varies by ±{jitter:.0f} ms.",
+                "Jitter above 10 ms hurts calls: usually a busy channel or power-saving clients.",
+                network=ssid)
         dns = result.get("dns_ms")
         if dns is not None and dns >= 150:
-            add("Low", "Slow DNS", f"A DNS lookup took {dns:.0f} ms.",
-                "Slow DNS makes everything feel slow: check the resolver the network hands out.")
+            add("Low", "Slow DNS", f"A DNS lookup{on} took {dns:.0f} ms.",
+                "Slow DNS makes everything feel slow: check the resolver the network hands out.",
+                network=ssid)
     for speed in [point.throughput or {}, *point.throughputs]:
         down = speed.get("down_mbps")
         on = f" on {speed['ssid']}" if speed.get("ssid") else ""
@@ -482,7 +489,7 @@ def _general(point, ctx, add) -> None:
             add("Low", "Throughput test failed", f"The throughput test{on} failed: {speed['error']}.",
                 "Check the iperf3 server is running (iperf3 -s) and reachable from this network; "
                 "a public server may simply be busy.", network=speed.get("ssid", ""))
-    if not result:
+    if not checks:
         add("Low", "No connection check", "No connection check (latency, loss, DNS) at this point.",
             "Connect the adapter to the network and measure again to confirm it's usable, "
             "not just strong.")
