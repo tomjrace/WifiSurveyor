@@ -146,6 +146,30 @@ class StateMachineTests(unittest.TestCase):
         _start, _beats, logged = outage.read_session(self.watch.log.path)
         self.assertEqual(logged[0].diagnosis["cause"], "unit_down")
 
+    def test_the_computer_sleeping_mid_watch(self):
+        world = self.world
+        self.run_until(T0 + 60)
+        world.internet = False                  # an outage going on as the computer sleeps
+        self.run_until(T0 + 80)
+        self.assertIsNotNone(self.watch.current)
+        self.watch.pause()
+        self.assertEqual(self.watch.state, "asleep")
+        self.assertIsNone(self.watch.current, "the outage ends where the sleep starts")
+        slept_at = clock.now
+        # Two hours later: the internet's back, and the adapter let go of the network as it slept
+        clock.now += 7200
+        world.internet, world.associated = True, False
+        self.watch.resume()
+        self.run_until(clock.now + 10)
+        self.assertTrue(world.associated, "it rejoins on waking")
+        self.run_until(clock.now + 60)
+        self.assertEqual(self.watch.state, "up")
+        self.assertEqual(len(self.watch.incidents), 1, "waking up isn't an outage")
+        self.assertLessEqual(self.watch.incidents[0].end, slept_at)
+        kinds = [r["type"] for r in outage.read_records(self.watch.log.path)]
+        self.assertLess(kinds.index("suspend"), kinds.index("resume"))
+        self.assertIn("incident", kinds[:kinds.index("suspend")], "written down before the sleep")
+
     def test_one_radio_restarting(self):
         world = self.world
         self.run_until(T0 + 60)
@@ -261,6 +285,7 @@ class BothBandsTests(unittest.TestCase):
                 self.name, self.rounds = name, rounds
                 self.analyzer = analyzer
                 self._stop = threading.Event()
+                self._paused = threading.Event()
 
             def _dwell_once(self):
                 done.append(self.name)
@@ -313,6 +338,41 @@ class BothBandsTests(unittest.TestCase):
             self.addCleanup(high.close)
             self.assertNotEqual(low.folder, high.folder)
             self.assertTrue(low.folder.name.endswith("home 2.4 GHz"))
+
+
+    def test_staying_awake_on_battery(self):
+        from wifisurveyor.net.power import stay_awake
+
+        self.assertTrue(stay_awake(None), "no UPower: nothing to protect")
+        self.assertTrue(stay_awake({"IsPresent": False}), "a desktop")
+        self.assertTrue(stay_awake({"IsPresent": True, "State": 1, "Percentage": 5.0}), "charging")
+        self.assertTrue(stay_awake({"IsPresent": True, "State": 2, "Percentage": 16.0}))
+        self.assertFalse(stay_awake({"IsPresent": True, "State": 2, "Percentage": 15.0}))
+        self.assertFalse(stay_awake({"IsPresent": True, "State": 6, "Percentage": 9.0}))
+
+    def test_sleep_lets_go_once_the_watch_is_paused(self):
+        from wifisurveyor.net import power
+
+        said = []
+        awake = power.KeepAwake("Watching office5g", on_sleep=lambda: said.append("sleep"),
+                                on_wake=lambda: said.append("wake"))
+        read, write = os.pipe()
+        os.close(read)
+        awake._delay = write
+        with mock.patch.object(awake, "_inhibit", return_value=None) as inhibit, \
+                mock.patch.object(awake, "_read_battery", return_value=None):
+            awake._prepare_for_sleep(None, "", "", "", "", sleep_signal(True))
+            self.assertEqual(said, ["sleep"])
+            self.assertIsNone(awake._delay, "let go, so the computer can sleep")
+            awake._prepare_for_sleep(None, "", "", "", "", sleep_signal(False))
+            self.assertEqual(said, ["sleep", "wake"])
+            inhibit.assert_any_call("sleep", "delay")     # ready for the next sleep
+
+
+def sleep_signal(going: bool):
+    from gi.repository import GLib
+
+    return GLib.Variant("(b)", (going,))
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 from ..core import library, outage, watchreport
 from ..core.colours import ssid_colour
 from ..net import connectivity, monitor as monitor_mode, wifi
+from ..net.power import KeepAwake
 from ..net.ssidmonitor import (HOLDER, WIFI_STAGES, SsidMonitor, Target, band_name,
                                bands_compared, describe_siblings, partner, share_adapters,
                                trouble_words)
@@ -266,6 +267,7 @@ class MonitorView(Gtk.Box):
         self._provisional_at: dict[int, float] = {}
         self._provisional_busy: set[int] = set()
         self._tick_id = 0
+        self._awake: KeepAwake | None = None   # holds the computer awake while watching
         self._histories: dict[int, History] = {}     # id(watcher) -> its beats as arrays
         self._span: float | None = None     # seconds across the traces; None: fits the session
         self._end: float | None = None      # the time at their right edge; None: the latest
@@ -795,6 +797,11 @@ class MonitorView(Gtk.Box):
             self.open_folder.set_sensitive(True)
             self.report.set_sensitive(True)
             self.to_survey.set_sensitive(True)
+            self._awake = KeepAwake(f"Watching {watchers[0].target.ssid}",
+                                    on_sleep=lambda: [w.pause() for w in watchers],
+                                    on_wake=lambda: [w.resume() for w in watchers],
+                                    on_change=self._describe_running)
+            self._awake.start()
             self._begin_view()
             self._tick_id = self.vitals.add_tick_callback(self._tick)
             if trouble:
@@ -832,6 +839,9 @@ class MonitorView(Gtk.Box):
         dialog.present(self)
 
     def _release(self, watchers) -> None:
+        if self._awake is not None:
+            self._awake.stop()
+            self._awake = None
         for watcher in watchers:
             for device in (watcher.device, watcher.monitor_device):
                 self.session.radio_holds.pop(device, None)
@@ -910,6 +920,8 @@ class MonitorView(Gtk.Box):
                 lines.append(f"   Saved as it goes to {GLib.markup_escape_text(str(watcher.log.folder))}")
             for source, note in sorted(watcher.notes.items()):
                 lines.append(f"   ⚠ {GLib.markup_escape_text(note)}")
+        if self._awake is not None and self._awake.note:
+            lines.append(GLib.markup_escape_text(self._awake.note) + ".")
         self.evidence.set_markup("\n".join(lines))
 
     # ---------- keeping the page up to date ----------
@@ -1870,7 +1882,7 @@ class MonitorView(Gtk.Box):
                            else ""))
             elif state == "degraded":
                 colour, text = (0.35, 0.25, 0.02), watcher.status
-            elif state in ("joining", "starting"):
+            elif state in ("joining", "starting", "asleep"):
                 colour, text = (0.12, 0.14, 0.18), watcher.status
             else:
                 colour = (0.03, 0.22, 0.10)

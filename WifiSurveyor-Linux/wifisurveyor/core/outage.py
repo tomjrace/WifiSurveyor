@@ -27,6 +27,7 @@ import csv
 import io
 import json
 import math
+import os
 import statistics
 import threading
 import time
@@ -998,6 +999,13 @@ class SessionLog:
                 return
             self._file.write(json.dumps(record, separators=(",", ":"), default=_jsonable) + "\n")
             self._file.flush()
+
+    def sync(self) -> None:
+        """Onto the disk itself, not just the system's cache: for when the power may go."""
+        with self._lock:
+            if not self._file.closed:
+                self._file.flush()
+                os.fsync(self._file.fileno())
 
     def close(self) -> None:
         with self._lock:

@@ -31,6 +31,7 @@ SCAN_EVERY = 8.0              # seconds between scans while the link is down
 JOIN_BACKOFF = (5, 10, 20, 30, 60)
 SETTLE = 30.0                 # seconds of evidence gathered after an incident ends
 DHCP_GRACE = 20.0             # seconds after joining before no address counts as a failure
+WAKE_GRACE = 60.0             # seconds after the computer wakes for the adapter to find the network again
 FAILS_TO_OPEN = 2             # failed beats in a row before a non-disconnect incident opens
 SLOW_MS = 250.0
 WIFI_STAGES = ("disconnect", "no_gateway", "no_address")   # failures of the Wi-Fi link itself
@@ -220,6 +221,8 @@ class SsidMonitor:
         self.dns_stats: dict[str, list[int]] = {}   # server -> [asked, failed]
         self.tsf_known: dict[str, list] = {}    # bssid -> [time, tsf_us]
         self._stop = threading.Event()
+        self._paused = threading.Event()        # the computer is asleep
+        self._woke_at = 0.0
         self._fails = 0
         self._first_fail = 0.0
         self._last_station: dict = {}
@@ -327,6 +330,47 @@ class SsidMonitor:
     def running(self) -> bool:
         return self.started > 0 and not self._stop.is_set()
 
+    # ---------- the computer sleeping ----------
+
+    def pause(self) -> None:
+        """
+        The computer is about to sleep: an outage going on ends now (the sleep isn't one), and
+        everything so far is made safe on the disk, in case the battery runs out before it wakes.
+        """
+        if self._paused.is_set() or not self.running:
+            return
+        self._paused.set()
+        now = time.time()
+        with self.lock:
+            if self.current is not None:
+                self.current.end = self.current.end or now
+                self._finish(self.current)
+            last = self._fold_logged(None)
+            self._say("asleep", "Paused while the computer sleeps: the watch picks up when it wakes")
+        if self.log:
+            if last:
+                self.log.write(last)
+            self.log.write({"type": "suspend"})
+            self.log.sync()
+        self.changed()
+
+    def resume(self) -> None:
+        """The computer woke: the watch carries on in the same session, once the adapter rejoins."""
+        if not self._paused.is_set() or not self.running:
+            return
+        with self.lock:
+            # What was learnt before the sleep says nothing about the link now
+            self._last_station, self._pending = {}, {}
+            self._fails = self._gw_misses = self._join_tries = 0
+            self._joined_at = self._next_join = 0.0
+            self._gateway = None
+            self._woke_at = time.time()
+            self._say("joining", f"Awake again: rejoining {self.target.ssid}…")
+        if self.log:
+            self.log.write({"type": "resume"})
+        self._paused.clear()
+        self.changed()
+
     def _release_from_autoconnect(self) -> None:
         """
         Keeps NetworkManager from putting the adapter on another network while this one is
@@ -413,6 +457,10 @@ class SsidMonitor:
     def _beat_loop(self) -> None:
         next_at = time.monotonic()
         while not self._stop.is_set():
+            if self._paused.is_set():
+                self._stop.wait(0.5)
+                next_at = time.monotonic()
+                continue
             try:
                 self._beat()
             except Exception as error:      # one bad beat mustn't end a week's watch
@@ -474,6 +522,13 @@ class SsidMonitor:
                              (self._gw_misses >= 2 and self._gateway_answers) else "no_internet")
                 elif dns.get("dns_error") and "dns_ms" not in dns:
                     stage = "dns"
+        rejoin = False
+        if stage and now - self._woke_at < WAKE_GRACE:
+            # Just woken: the adapter is still finding the network, which isn't an outage
+            waiting = True
+            if stage == "disconnect" and now >= self._next_join:
+                self._next_join = now + JOIN_BACKOFF[0]
+                rejoin = True
 
         # Amber is for what someone using the network would notice: slow replies. Missed
         # beacons that don't stop the connection working are drawn, but not as a fault.
@@ -494,6 +549,8 @@ class SsidMonitor:
         if down is not None:
             # Scans and joins take seconds: never while holding the lock the view reads under
             self._while_down(down, now)
+        elif rejoin:
+            self._join(quiet=True)
 
     def _check_adapter(self, now: float) -> None:
         """
@@ -1021,7 +1078,12 @@ def _take_turns(analyzer, key: int, members: list) -> None:
                     del _shares[key]
                     return
                 turn = list(members)
+            if all(w._paused.is_set() for w in turn):
+                turn[0]._stop.wait(1.0)       # the computer's asleep: the analyzer waits too
+                continue
             for watcher in turn:
+                if watcher._paused.is_set():
+                    continue
                 if not watcher._stop.is_set() and not watcher._dwell_once():
                     with _shares_lock:
                         if watcher in members:
