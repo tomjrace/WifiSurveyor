@@ -24,6 +24,27 @@ class ReportTests(unittest.TestCase):
                              network("Home", -63, freq=2462, channel=11)], every_bssid=True)
         self.assertEqual([ap["rssi"] for ap in aps], [-56, -62, -63])
 
+    def test_estimated_levels_are_said_up_front(self) -> None:
+        project = Project(name="Office")
+        project.points = [Point(x=1, y=1, networks=[network("Home", -50, rssi_source="nmcli")]),
+                          Point(x=2, y=2, networks=[network("Home", -55)])]
+        html = report.build_html(project, b"\x89PNG", lambda _p: None)
+        self.assertIn("Signal levels are estimates.", html)
+        self.assertIn("At 1 of 2 points", html)
+        project.points.pop(0)
+        self.assertNotIn("Signal levels are estimates.",
+                         report.build_html(project, b"\x89PNG", lambda _p: None))
+
+    def test_a_spot_with_good_rf_but_other_problems_says_so(self) -> None:
+        from wifisurveyor.core.advice import Improvement
+
+        label, why = report._not_only_rf([Improvement("High", "High latency", "", ""),
+                                          Improvement("Low", "Noise not measured", "", ""),
+                                          Improvement("Medium", "Jitter", "", "")])
+        self.assertEqual(label, "Signal, noise and airtime pass")
+        self.assertIn("but high latency and jitter need work", why)
+        self.assertNotIn("noise not measured", why)
+
     def test_report_holds_each_point_and_its_spectrum_picture(self) -> None:
         project = Project(name="Office <1>")
         project.points = [
@@ -43,6 +64,9 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(html.count("<img"), 2)             # the map and one spectrum
         self.assertIn("Weak coverage", html)
         self.assertIn('querySelectorAll("section.point table")', html)   # sortable
+        self.assertIn("data-theme-toggle", html)                           # dark mode
+        self.assertIn("wifisurveyor-checklist:", html)                     # ticks kept
+        self.assertIn(':root[data-theme="dark"]', html)
 
     def test_each_range_swept_is_pictured_folded_away(self) -> None:
         project = Project(name="Hall")

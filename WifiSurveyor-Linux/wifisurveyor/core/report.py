@@ -24,22 +24,39 @@ BAND_NAMES = {"2.4": "2.4 GHz", "5": "5 GHz", "6": "6 GHz"}
 QUALITY_WORDS = {"good": "Good", "fair": "Could be better", "poor": "Needs work"}
 
 STYLE = """
-:root { color-scheme: light; --good: #16A34A; --fair: #EAB308; --poor: #DC2626; }
-body { font: 15px/1.55 Cantarell, "Segoe UI", system-ui, sans-serif; color: #1E293B;
-       margin: 0 auto; padding: 32px 28px 60px; max-width: 1100px; background: #FFFFFF; }
+:root { color-scheme: light; --good: #16A34A; --fair: #EAB308; --poor: #DC2626;
+        --bg: #FFFFFF; --text: #1E293B; --muted: #5B6778; --sub: #475569; --fix: #334155;
+        --line: #D9DEE5; --rule: #E5E9EF; --line-soft: #EEF1F5; --head: #F3F5F8;
+        --row-now: #F8FAFC; --link: #1D4ED8; --neutral: #CBD5E1; --sort-idle: #9AA5B4;
+        --benefit: #14532D; --good-bg: #DCFCE7; --good-fg: #14532D; --fair-bg: #FEF3C7;
+        --fair-fg: #713F12; --poor-bg: #FEE2E2; --poor-fg: #7F1D1D; }
+/* Dark on screen only: printing always comes out light */
+@media screen {
+  :root[data-theme="dark"] { color-scheme: dark;
+        --bg: #0F172A; --text: #E2E8F0; --muted: #94A3B8; --sub: #CBD5E1; --fix: #CBD5E1;
+        --line: #334155; --rule: #2A3648; --line-soft: #1E293B; --head: #1E293B;
+        --row-now: #172235; --link: #93C5FD; --neutral: #475569; --sort-idle: #64748B;
+        --benefit: #86EFAC; --good-bg: #14532D; --good-fg: #BBF7D0; --fair-bg: #713F12;
+        --fair-fg: #FEF08A; --poor-bg: #7F1D1D; --poor-fg: #FECACA; }
+  /* The plan and spectrum pictures are drawn light: dimmed a little so they don't glare */
+  :root[data-theme="dark"] img:not(.logo) { filter: brightness(.88); }
+  :root[data-theme="dark"] header.cover img.logo { background: #FFFFFF; padding: 4px; border-radius: 4px; }
+}
+body { font: 15px/1.55 Cantarell, "Segoe UI", system-ui, sans-serif; color: var(--text);
+       margin: 0 auto; padding: 32px 28px 60px; max-width: 1100px; background: var(--bg); }
 h1 { font-size: 26px; margin: 0 0 4px; }
-h2 { font-size: 19px; margin: 36px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #D9DEE5; }
+h2 { font-size: 19px; margin: 36px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 h3 { font-size: 17px; margin: 0; display: flex; align-items: center; gap: 10px; }
 h4 { font-size: 14px; margin: 14px 0 4px; text-transform: uppercase; letter-spacing: .04em;
-     color: #5B6778; }
-a { color: #1D4ED8; }
-.muted { color: #5B6778; }
-img { max-width: 100%; border: 1px solid #D9DEE5; border-radius: 6px; display: block; }
+     color: var(--muted); }
+a { color: var(--link); }
+.muted { color: var(--muted); }
+img { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; }
 table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 14px; }
-th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid #E5E9EF; vertical-align: top; }
-th { background: #F3F5F8; font-weight: 600; }
+th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { background: var(--head); font-weight: 600; }
 th.sort { cursor: pointer; user-select: none; }
-th.sort::after { content: " ↕"; color: #9AA5B4; font-weight: 400; }
+th.sort::after { content: " ↕"; color: var(--sort-idle); font-weight: 400; }
 th.sort[aria-sort="ascending"]::after { content: " ▲"; color: inherit; }
 th.sort[aria-sort="descending"]::after { content: " ▼"; color: inherit; }
 @media print { th.sort::after { content: none; } }
@@ -51,26 +68,26 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
 .ssid { white-space: nowrap; font-weight: 600; }
 .q { display: inline-block; padding: 0 7px; border-radius: 4px; font-weight: 600;
      font-variant-numeric: tabular-nums; }
-.q-good { background: #DCFCE7; color: #14532D; }
-.q-fair { background: #FEF3C7; color: #713F12; }
-.q-poor { background: #FEE2E2; color: #7F1D1D; }
+.q-good { background: var(--good-bg); color: var(--good-fg); }
+.q-fair { background: var(--fair-bg); color: var(--fair-fg); }
+.q-poor { background: var(--poor-bg); color: var(--poor-fg); }
 .sev { display: inline-block; min-width: 58px; text-align: center; padding: 0 6px; border-radius: 4px;
        font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
 .sev-High { background: var(--poor); color: #fff; }
 .sev-Medium { background: var(--fair); color: #422006; }
-.sev-Low { background: #CBD5E1; color: #1E293B; }
+.sev-Low { background: var(--neutral); color: var(--text); }
 .trends { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px;
           margin: 12px 0; }
-.trend { border: 1px solid #D9DEE5; border-radius: 8px; padding: 8px 10px 4px; }
+.trend { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px 4px; }
 .trend b { font-size: 13px; display: block; }
 .trend svg { width: 100%; height: auto; display: block; }
 .then { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
 .then figure { margin: 0; }
-.then figcaption { font-size: 13px; color: #5B6778; margin-top: 4px; }
-tr.now td { font-weight: 600; background: #F8FAFC; }
+.then figcaption { font-size: 13px; color: var(--muted); margin-top: 4px; }
+tr.now td { font-weight: 600; background: var(--row-now); }
 .cards { display: flex; gap: 12px; flex-wrap: wrap; margin: 14px 0; }
-.card { flex: 1 1 150px; border: 1px solid #D9DEE5; border-radius: 8px; padding: 10px 14px;
-        border-top: 5px solid var(--c, #CBD5E1); }
+.card { flex: 1 1 150px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px;
+        border-top: 5px solid var(--c, var(--neutral)); }
 .card b { font-size: 24px; display: block; }
 .mapbox { position: relative; display: inline-block; max-width: 100%; }
 .mapbox img { width: 100%; }
@@ -84,17 +101,17 @@ tr.now td { font-weight: 600; background: #F8FAFC; }
 .timeline img { display: block; max-width: none; }
 .pin:hover { transform: translate(-50%, -50%) scale(1.25); z-index: 2; }
 .scalebar { position: absolute; left: 12px; bottom: 12px; background: rgba(255,255,255,.9);
-            padding: 2px 6px 4px; border-radius: 4px; font-size: 12px; }
+            padding: 2px 6px 4px; border-radius: 4px; font-size: 12px; color: var(--text); }
 .scalebar div { height: 6px; border: 2px solid #1E293B; border-top: 0; }
-.point { border: 1px solid #D9DEE5; border-radius: 8px; padding: 16px 18px; margin: 18px 0;
-         border-left: 6px solid var(--c, #CBD5E1); }
+.point { border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; margin: 18px 0;
+         border-left: 6px solid var(--c, var(--neutral)); }
 .point-head { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
 .point-head .text { flex: 1 1 380px; }
 .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 30px;
          height: 30px; border-radius: 15px; color: #fff; font-weight: 700; padding: 0 6px;
          box-sizing: border-box; }
 .badge.fair { color: #422006; }
-.locator { position: relative; width: 240px; flex: 0 0 240px; border: 1px solid #D9DEE5;
+.locator { position: relative; width: 240px; flex: 0 0 240px; border: 1px solid var(--line);
            border-radius: 6px; background-size: 100% 100%; background-repeat: no-repeat; }
 .locator span { position: absolute; width: 18px; height: 18px; border-radius: 50%;
                 transform: translate(-50%, -50%); border: 3px solid #fff;
@@ -102,51 +119,59 @@ tr.now td { font-weight: 600; background: #F8FAFC; }
 .facts { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 8px 0; font-size: 14px; }
 .facts span b { font-weight: 600; }
 ul.todo { list-style: none; padding: 0; margin: 6px 0; }
-ul.todo li { padding: 6px 0; border-bottom: 1px solid #EEF1F5; }
-ul.todo .fix { color: #334155; }
-ul.todo .fix::before { content: "→ "; color: #1D4ED8; font-weight: 700; }
+ul.todo li { padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
+ul.todo .fix { color: var(--fix); }
+ul.todo .fix::before { content: "→ "; color: var(--link); font-weight: 700; }
 .chip { display: inline-block; margin: 1px 2px; padding: 0 6px; border-radius: 9px; font-size: 12px;
         font-weight: 700; text-decoration: none; color: #fff; }
 .chip.fair { color: #422006; }
 .verdict { margin: 6px 0 10px; }
-.note { background: #F3F5F8; border-left: 3px solid #1D4ED8; padding: 8px 12px; margin: 10px 0;
+.notice { background: var(--fair-bg); color: var(--fair-fg); border-left: 4px solid var(--fair);
+          padding: 10px 14px; margin: 12px 0; border-radius: 4px; font-size: 14px; }
+/* On a phone a wide table scrolls sideways by itself, instead of the whole page */
+@media screen and (max-width: 700px) {
+  table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  /* Short figures stay on one line; a point table's last column (notes, BSSID) may wrap */
+  section.point th, section.point td:not(:last-child) { white-space: nowrap; }
+  body { padding: 20px 16px 48px; } }
+.note { background: var(--head); border-left: 3px solid var(--link); padding: 8px 12px; margin: 10px 0;
         font-size: 14px; }
 .top { font-size: 13px; float: right; }
 h3.sub { margin: 14px 0 6px; }
 ol.top-actions { padding-left: 22px; }
 ol.top-actions li { margin: 8px 0; }
-.benefit { color: #14532D; font-size: 14px; }
+.benefit { color: var(--benefit); font-size: 14px; }
 .benefit::before { content: "Users will notice: "; font-weight: 600; }
-.why { color: #475569; font-size: 14px; }
+.why { color: var(--sub); font-size: 14px; }
 .where { margin-top: 2px; }
-.theme { border: 1px solid #D9DEE5; border-left: 6px solid var(--c, #CBD5E1); border-radius: 8px;
+.theme { border: 1px solid var(--line); border-left: 6px solid var(--c, var(--neutral)); border-radius: 8px;
          padding: 12px 16px; margin: 14px 0; break-inside: avoid; }
 .theme h3 .q { font-size: 12px; }
 ul.recs { list-style: none; padding: 0; margin: 4px 0; }
-ul.recs li { padding: 8px 0; border-top: 1px solid #EEF1F5; }
+ul.recs li { padding: 8px 0; border-top: 1px solid var(--line-soft); }
 header.cover { display: flex; justify-content: space-between; align-items: center; gap: 20px;
                margin-bottom: 18px; font-size: 14px; }
 header.cover img.logo { max-height: 70px; max-width: 260px; border: 0; }
 header.cover div { text-align: right; margin-left: auto; }
 table.whom { width: auto; }
-table.whom th { background: none; color: #5B6778; font-weight: 600; padding-right: 24px; }
+table.whom th { background: none; color: var(--muted); font-weight: 600; padding-right: 24px; }
 ul.checklist { list-style: none; padding: 0; }
-ul.checklist li { padding: 5px 0; border-bottom: 1px solid #EEF1F5; }
+ul.checklist li { padding: 5px 0; border-bottom: 1px solid var(--line-soft); }
 ul.checklist input { width: 16px; height: 16px; vertical-align: -2px; }
 ul.checklist ul.checklist { margin: 4px 0 0 26px; }
 ul.checklist ul.checklist li:last-child { border-bottom: 0; }
 ol.steps { margin: 4px 0; padding-left: 22px; font-size: 14px; }
-details.sweeps { border: 1px solid #D9DEE5; border-radius: 8px; margin: 14px 0; }
+details.sweeps { border: 1px solid var(--line); border-radius: 8px; margin: 14px 0; }
 details.sweeps > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; }
 details.sweeps > summary .muted { font-weight: 400; }
-details.sweeps[open] > summary { border-bottom: 1px solid #EEF1F5; }
+details.sweeps[open] > summary { border-bottom: 1px solid var(--line-soft); }
 details.sweeps figure { margin: 10px 14px 16px; }
-details.sweeps figcaption { font-size: 13px; color: #475569; margin-bottom: 4px; }
+details.sweeps figcaption { font-size: 13px; color: var(--sub); margin-bottom: 4px; }
 details.sweeps .inner { padding: 0 12px 4px; }
 details.fold > summary { list-style: none; cursor: pointer; }
 details.fold > summary::-webkit-details-marker { display: none; }
 details.fold > summary h2::before, details.fold > summary h3::before {
-  content: ""; width: 7px; height: 7px; flex: 0 0 auto; border: solid #5B6778;
+  content: ""; width: 7px; height: 7px; flex: 0 0 auto; border: solid var(--muted);
   border-width: 0 2px 2px 0; transform: rotate(-45deg); transition: transform .15s;
   margin-right: 4px; }
 details.fold[open] > summary h2::before, details.fold[open] > summary h3::before {
@@ -155,18 +180,48 @@ details.section > summary h2 { display: flex; align-items: center; gap: 8px; }
 details.section:not([open]) > summary h2 { margin-bottom: 0; }
 details.point-fold:not([open]) > summary h3 { margin-bottom: -4px; }
 details.point-fold[open] > summary { margin-bottom: 6px; }
-.fold-bar { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; justify-content: flex-end;
-            padding: 8px 0; background: #FFFFFF; border-bottom: 1px solid #EEF1F5; }
+.fold-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end;
+            padding: 8px 0; background: var(--bg); border-bottom: 1px solid var(--line-soft); }
 .fold-bar button { font: inherit; font-size: 14px; padding: 6px 14px; border-radius: 6px;
-                   border: 1px solid #CBD5E1; background: #F3F5F8; color: #1E293B; cursor: pointer;
+                   border: 1px solid var(--neutral); background: var(--head); color: var(--text); cursor: pointer;
                    min-height: 36px; }
-.fold-bar button:hover { background: #E5E9EF; }
+.fold-bar button:hover { background: var(--rule); }
 @media print { body { padding: 0; } .point { break-inside: avoid; } a { color: inherit; }
                details.sweeps > summary { list-style: none; } .fold-bar { display: none; }
                details.fold > summary h2::before, details.fold > summary h3::before { display: none; } }
 """
 FOLD_BAR = ('<div class="fold-bar"><button type="button" data-fold="open">Expand all</button>'
-            '<button type="button" data-fold="close">Collapse all</button></div>')
+            '<button type="button" data-fold="close">Collapse all</button>'
+            '<button type="button" data-theme-toggle aria-pressed="false">Dark mode</button></div>')
+# Light or dark: the reader's last choice on this device, else what their system prefers. Set in
+# the head, so a dark page never flashes light first
+THEME_EARLY = """<script>
+(() => {
+  let chosen = null;
+  try { chosen = localStorage.getItem("wifisurveyor-report-theme"); } catch (e) {}
+  document.documentElement.dataset.theme = chosen
+    || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+})();
+</script>"""
+THEME_TOGGLE = """<script>
+(() => {
+  const root = document.documentElement;
+  document.querySelectorAll("[data-theme-toggle]").forEach(button => {
+    const show = () => {
+      const dark = root.dataset.theme === "dark";
+      button.textContent = dark ? "Light mode" : "Dark mode";
+      button.setAttribute("aria-pressed", String(dark));
+    };
+    button.addEventListener("click", () => {
+      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+      try { localStorage.setItem("wifisurveyor-report-theme", root.dataset.theme); } catch (e) {}
+      document.querySelectorAll("[data-theme-toggle]").forEach(b => b.dispatchEvent(new Event("theme")));
+    });
+    button.addEventListener("theme", show);
+    show();
+  });
+})();
+</script>"""
 # Marks where the folded sections end (see _fold_sections)
 SECTIONS_END = "<!-- end of sections -->"
 # Expand all and Collapse all; and a link to something folded away (a pin to its point, a
@@ -233,6 +288,25 @@ SORTING = """<script>
       th.addEventListener("keydown", event => {
         if (event.key === "Enter" || event.key === " ") { event.preventDefault(); sort(); }
       });
+    });
+  });
+})();
+</script>"""
+# The checklist's ticks, kept on this device under the report's title and each item's words,
+# so ticking survives reopening the report, and a re-exported one keeps the items still in it
+CHECKLIST_TICKS = """<script>
+(() => {
+  // The overview and the full report share their ticks
+  const key = "wifisurveyor-checklist:" + document.title.replace(/ overview$/, "");
+  let ticked = [];
+  try { ticked = JSON.parse(localStorage.getItem(key) || "[]"); } catch (e) {}
+  const boxes = [...document.querySelectorAll("ul.checklist input[type=checkbox]")];
+  const words = box => box.closest("label").textContent.replace(/\\s+/g, " ").trim();
+  boxes.forEach(box => {
+    box.checked = ticked.includes(words(box));
+    box.addEventListener("change", () => {
+      const now = boxes.filter(b => b.checked).map(words);
+      try { localStorage.setItem(key, JSON.stringify(now)); } catch (e) {}
     });
   });
 })();
@@ -376,18 +450,19 @@ def _facts(point, ctx, ssid, band) -> str:
     """The key numbers for one spot, each coloured by how good it is."""
     profile = ctx.profile
     best = point.best(ssid, None, band)
+    estimate = any(n.get("rssi_source") == "nmcli" for n in point.networks)
     parts = []
     if best is not None:
         parts.append(f"<span>Serving: {_ssid(best['ssid'])} "
                      f"{escape(BAND_NAMES.get(best.get('band'), ''))} {escape(advice.channel_name(best))}</span>")
-        parts.append(f"<span><b>Signal</b> {_signal(best['rssi'], profile.primary)}</span>")
+        parts.append(f"<span><b>Signal</b> {_signal(best['rssi'], profile.primary, estimate)}</span>")
         floor = analysis.noise_floor(point, best.get("band"))
         if floor is not None:
             snr = best["rssi"] - floor
             parts.append(f"<span><b>SNR</b> {_graded(snr, profile.snr + 5, profile.snr, True, f'{snr:.0f} dB')}</span>")
             parts.append(f"<span><b>Noise</b> {_graded(floor, -90, -85, False, f'{floor:.0f} dBm')}</span>")
     second = rfplan.nth_strongest(point, 2, ssid or (best or {}).get("ssid"), band)
-    parts.append(f"<span><b>2nd AP</b> {_signal(second, profile.secondary or -75)}</span>")
+    parts.append(f"<span><b>2nd AP</b> {_signal(second, profile.secondary or -75, estimate)}</span>")
     others = rfplan.contenders(point, ssid or (best or {}).get("ssid"), band)
     if others is not None:
         parts.append(f"<span><b>Sharing the channel</b> "
@@ -416,6 +491,30 @@ def _facts(point, ctx, ssid, band) -> str:
     if phone is not None:
         parts.append(f"<span><b>Cellular</b> {_graded(phone, cellular.GOOD_DBM, cellular.FAIR_DBM, True, f'{phone:.0f} dBm/5 MHz')}</span>")
     return f'<div class="facts">{"".join(parts)}</div>'
+
+
+def _estimated_notice(points) -> str:
+    """Said up front: levels read without root are estimates, whatever the tables look like."""
+    estimated = sum(1 for p in points if any(n.get("rssi_source") == "nmcli" for n in p.networks))
+    if not estimated:
+        return ""
+    share = "every point" if estimated == len(points) else f"{estimated} of {len(points)} points"
+    return ("<p class=\"notice\"><b>Signal levels are estimates.</b> At "
+            f"{share}, the app wasn't running as root, so the levels come from NetworkManager's "
+            "0–100 quality figure converted to dBm, not measured dBm (they're marked ~). They "
+            "can be several dB out, so treat a spot close to a target as unsure either way. "
+            "Measuring again with the app run as root gives true levels.</p>")
+
+
+def _not_only_rf(found: list[advice.Improvement]) -> tuple[str, str]:
+    """A spot whose signal, noise and airtime pass, but that has other things to fix."""
+    serious = [f.title for f in found if f.severity in ("High", "Medium")]
+    listed = ", ".join(t[0].lower() + t[1:] for t in serious[:-1])
+    listed = f"{listed} and {serious[-1][0].lower() + serious[-1][1:]}" if listed else \
+        serious[0][0].lower() + serious[0][1:]
+    return ("Signal, noise and airtime pass",
+            f"The radio side meets the targets here, but {listed} "
+            f"{'need' if len(serious) > 1 else 'needs'} work: see below.")
 
 
 def _todo(found: list[advice.Improvement]) -> str:
@@ -518,7 +617,7 @@ def build_html(project, map_png: bytes | None,
     html = [
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">",
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-        f"<title>{escape(project.name)}: Wi-Fi survey{' overview' if overview_only else ''}</title><style>{STYLE}{map_css}</style></head>"
+        f"<title>{escape(project.name)}: Wi-Fi survey{' overview' if overview_only else ''}</title><style>{STYLE}{map_css}</style>{THEME_EARLY}</head>"
         "<body id=\"top\">",
         _cover(details or {}),
         f"<h1>{escape(project.name)}</h1>",
@@ -530,6 +629,7 @@ def build_html(project, map_png: bytes | None,
         + f"{scale} · {time.strftime('%d %B %Y, %H:%M')}</p>",
     ]
     html.append(FOLD_BAR)
+    html.append(_estimated_notice(points))
     html.append(_for_whom(details or {}))
 
     # ----- at a glance -----
@@ -639,6 +739,8 @@ def build_html(project, map_png: bytes | None,
         html.append("<p class=\"muted\">The full report adds each point's findings, spectrum "
                     "and access points, the configuration audit and the channel plan.</p>")
         html.append(_method(project, ctx, version))
+        html.append(THEME_TOGGLE)
+        html.append(CHECKLIST_TICKS)
         html.append("</body></html>")
         return "\n".join(html)
 
@@ -792,6 +894,9 @@ def build_html(project, map_png: bytes | None,
         html.append("<div class=\"point-head\"><div class=\"text\">")
         html.append(f"<p class=\"muted\">{time.strftime('%d %B %Y, %H:%M', time.localtime(point.time))}"
                     + _where(project, point) + "</p>")
+        if key == "good" and grade != "good":
+            # The radio side passing isn't the spot passing: say what keeps it from good
+            label, why = _not_only_rf(todo[number - 1])
         html.append(f"<p class=\"verdict\"><span class=\"swatch\" style=\"background:"
                     f"{_colour(verdict_colour)}\"></span><b>{escape(label)}.</b> {escape(why)}</p>")
         if point.note:
@@ -799,7 +904,8 @@ def build_html(project, map_png: bytes | None,
         ok, failed = judged[number - 1]
         if ok is not None:
             html.append(f"<p>{'Meets' if ok else 'Fails'} {escape(ctx.profile.name)}"
-                        + ("" if ok else ": " + escape("; ".join(failed))) + ".</p>")
+                        + (" for signal, roaming and channel use" if ok else
+                           ": " + escape("; ".join(failed))) + ".</p>")
         html.append(_facts(point, ctx, each[number - 1], band))
         html.append("</div>")
         if map_png:
@@ -829,6 +935,8 @@ def build_html(project, map_png: bytes | None,
     html.append(_method(project, ctx, version))
     html.append(SECTIONS_END)
     html.append(FOLDING)
+    html.append(THEME_TOGGLE)
+    html.append(CHECKLIST_TICKS)
     html.append(SORTING)
     html.append(PRINT_OPENS)
     html.append("</body></html>")
@@ -1644,21 +1752,21 @@ def _trend(figure, rows: list[dict]) -> str:
     for fraction in (0.0, 1.0):                      # recessive guides, top and bottom
         level = top + (height - top - bottom) * fraction
         parts.append(f'<line x1="{left}" x2="{width - right}" y1="{level:.1f}" y2="{level:.1f}" '
-                     'stroke="#E5E9EF" stroke-width="1"/>')
+                     'style="stroke:var(--rule)" stroke-width="1"/>')
     path = " ".join(f"{'M' if n == 0 else 'L'}{x(i):.1f},{y(v):.1f}" for n, (i, v) in enumerate(points))
-    parts.append(f'<path d="{path}" fill="none" stroke="#1D4ED8" stroke-width="2" '
+    parts.append(f'<path d="{path}" fill="none" style="stroke:var(--link)" stroke-width="2" '
                  'stroke-linejoin="round" stroke-linecap="round"/>')
     for i, v in points:
         latest = i == points[-1][0]
         when = library.when(rows[i]["when"], False)
-        parts.append(f'<circle cx="{x(i):.1f}" cy="{y(v):.1f}" r="{5 if latest else 4}" fill="#1D4ED8" '
-                     f'stroke="#FFFFFF" stroke-width="2"><title>{escape(when)}: {v:.0f}{escape(unit)}'
+        parts.append(f'<circle cx="{x(i):.1f}" cy="{y(v):.1f}" r="{5 if latest else 4}" '
+                     f'style="fill:var(--link);stroke:var(--bg)" stroke-width="2"><title>{escape(when)}: {v:.0f}{escape(unit)}'
                      '</title></circle>')
     i, v = points[-1]
     parts.append(f'<text x="{x(i) + 8:.1f}" y="{y(v) + 4:.1f}" font-size="12" font-weight="600" '
-                 f'fill="#1E293B">{v:.0f}{escape(unit)}</text>')
+                 f'style="fill:var(--text)">{v:.0f}{escape(unit)}</text>')
     for i, anchor in ((points[0][0], "start"), (points[-1][0], "end")):
-        parts.append(f'<text x="{x(i):.1f}" y="{height - 5}" font-size="11" fill="#5B6778" '
+        parts.append(f'<text x="{x(i):.1f}" y="{height - 5}" font-size="11" style="fill:var(--muted)" '
                      f'text-anchor="{anchor}">{escape(library.when(rows[i]["when"], False))}</text>')
     parts.append("</svg>")
     better = "higher is better" if figure.higher_is_better else "lower is better"

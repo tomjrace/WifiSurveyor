@@ -158,6 +158,36 @@ class SurveyPointRangesTest(unittest.TestCase):
         self.assertIn("weren't measured", notes[0])
 
 
+class RootReminderTest(unittest.TestCase):
+    def test_first_three_points_after_a_start_or_a_long_break(self):
+        from wifisurveyor.core.project import Point
+        from wifisurveyor.ui import survey_view
+
+        toasts = []
+        view = mock.Mock(_root_reminders=0, _last_measured=0.0)
+        view.get_root.return_value = mock.Mock(toasts=mock.Mock(add_toast=toasts.append))
+        estimated = Point(x=0, y=0, networks=[{"rssi": -60, "rssi_source": "nmcli"}])
+        measured = Point(x=0, y=0, networks=[{"rssi": -60, "rssi_source": "iw"}])
+        clock = [1000.0]
+        with mock.patch.object(survey_view.wifi, "is_root", return_value=False), \
+                mock.patch.object(survey_view.time, "monotonic", lambda: clock[0]):
+            for _ in range(5):
+                survey_view.SurveyView._remind_about_root(view, estimated)
+                clock[0] += 30
+            self.assertEqual(len(toasts), 3)
+            self.assertEqual(toasts[0].get_button_label(), "Relaunch as root")
+            self.assertEqual(toasts[0].get_action_name(), "win.root")
+            clock[0] += survey_view.ROOT_IDLE + 1          # a long break: it says so again
+            survey_view.SurveyView._remind_about_root(view, estimated)
+            self.assertEqual(len(toasts), 4)
+            survey_view.SurveyView._remind_about_root(view, measured)   # true levels: nothing
+            self.assertEqual(len(toasts), 4)
+        with mock.patch.object(survey_view.wifi, "is_root", return_value=True):
+            view._root_reminders = 0
+            survey_view.SurveyView._remind_about_root(view, estimated)
+            self.assertEqual(len(toasts), 4)
+
+
 class RangeChoiceTest(unittest.TestCase):
     def setUp(self):
         from wifisurveyor.ui import spectrum_view

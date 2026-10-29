@@ -40,7 +40,10 @@ dfu-util` (HackRF, RTL-SDR, and flashing tinySA firmware).
 
 Scanning works unprivileged through NetworkManager, but NetworkManager only reports a 0–100
 quality, which the app maps onto dBm as an estimate. Every point records which it got, and
-the status line says so when a measurement is estimated. For true dBm, and for monitor mode
+the status line says so when a measurement is estimated. For the first three points after the
+app opens, or after a quarter of an hour without measuring, a notice also says the levels are
+estimates, with a **Relaunch as root** button on it. The report says so at the top too, and
+marks estimated levels with ~. For true dBm, and for monitor mode
 and capture, run as root, or use the orange **Relaunch as root** button (in the header, and on the
 start screen; it asks you to save first):
 
@@ -483,7 +486,11 @@ self-contained HTML file: what's limiting coverage across the survey, the map wi
 and for each point its diagnosis, the access points heard and that spectrum picture. Points
 measured before pictures were kept, or on Windows, get one drawn from their sweeps. Each
 point's tables list every BSSID heard, so several access points of one network on the same
-channel each get a row, and tapping a column heading sorts by it (again to reverse).
+channel each get a row, and tapping a column heading sorts by it (again to reverse). **Dark
+mode**, beside *Expand all* and *Collapse all*, switches the report to dark on screen; it starts
+from the system's setting, remembers the choice on that device, and always prints light.
+Ticks in the checklist are remembered on that device too, shared between the full report and the
+overview. On a phone, a wide table scrolls sideways by itself rather than the whole page.
 
 Under Heatmap, **Network** filters the map to one SSID and **Access point** narrows it further
 to a single BSSID (each listed with its manufacturer). The **Signal quality** panel below

@@ -36,6 +36,8 @@ from .spectrum_view import snapshot_png
 from .survey_setup import SurveySetupDialog
 
 RING_DIAMETER_FEET = 10.0     # each spectrum ring, once the plan has a scale
+ROOT_REMINDERS = 3            # points that say their levels are estimates, after a fresh start
+ROOT_IDLE = 15 * 60           # seconds without measuring after which that starts again
 BANDS = [("All bands", "All"), ("2.4 GHz", "2.4"), ("5 GHz", "5"), ("6 GHz", "6")]
 AUTO_CHANNEL = "Auto (serving network)"
 ALL_BSSIDS = "All access points"
@@ -54,6 +56,8 @@ class SurveyView(Gtk.Box):
         self.plan: cairo.ImageSurface | None = None
         self.overlay: cairo.ImageSurface | None = None
         self.busy = False
+        self._root_reminders = 0          # said since the app opened, or since a long idle
+        self._last_measured = 0.0         # time.monotonic() of the last point, 0 never
         self._needs_fit = True
         self._dragged = False
         self._suppress_tap = False
@@ -2048,9 +2052,30 @@ class SurveyView(Gtk.Box):
             if learned and not error:
                 self.status.set_text(f"{self.status.get_text()} "
                                      f"{hidden.describe_learned(self.session.project, learned)}")
+            if point is not None and not error:
+                self._remind_about_root(point)
             self.area.queue_draw()
 
         run_in_thread(work, done)
+
+    def _remind_about_root(self, point: Point) -> None:
+        """
+        Over the first few points after the app opens, or after a long break, a reminder that
+        the levels are estimates without root, with the way to fix it right there.
+        """
+        now = time.monotonic()
+        if not self._last_measured or now - self._last_measured > ROOT_IDLE:
+            self._root_reminders = 0
+        self._last_measured = now
+        estimated = any(n.get("rssi_source") == "nmcli" for n in point.networks)
+        overlay = getattr(self.get_root(), "toasts", None)
+        if not estimated or wifi.is_root() or overlay is None \
+                or self._root_reminders >= ROOT_REMINDERS:
+            return
+        self._root_reminders += 1
+        overlay.add_toast(Adw.Toast(
+            title="Not running as root, signal level is an estimate",
+            button_label="Relaunch as root", action_name="win.root", timeout=8))
 
     def _keep_in_monitor(self, device: str) -> None:
         """
