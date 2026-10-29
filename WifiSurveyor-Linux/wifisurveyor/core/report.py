@@ -272,7 +272,7 @@ def _overview(themes: list[overview.Theme], chip: Callable[[int], str]) -> str:
 
 
 def _networks_table(point, target: float) -> str:
-    aps = analysis.access_points(point.networks)
+    aps = analysis.access_points(point.networks, every_bssid=True)
     if not aps:
         return '<p class="muted">No access points heard.</p>'
     rows = []
@@ -352,7 +352,7 @@ def _facts(point, ctx, ssid, band) -> str:
         text = f"{down:.0f}↓" + (f" {speed['up_mbps']:.0f}↑" if speed.get("up_mbps") is not None else "") + " Mbps"
         label = f"Throughput, {escape(speed['ssid'])}" if speed.get("ssid") else "Throughput"
         parts.append(f"<span><b>{label}</b> {_graded(down, 100, 25, True, text)}</span>")
-    parts.append(f"<span><b>Access points heard</b> {len(analysis.access_points(point.networks))}</span>")
+    parts.append(f"<span><b>Access points heard</b> {len(analysis.access_points(point.networks, every_bssid=True))}</span>")
     busiest = analysis.band_activity(point)
     if busiest is not None:
         key = max(point.bands, key=lambda k: rfbands.activity(point.bands[k]) or 0.0)
@@ -800,7 +800,7 @@ def _sweeps(point, number: int, spectrum_png, range_png, band_png=None) -> str:
     """
     bands = []
     if point.spectrum and band_png:
-        heard = analysis.access_points(point.networks)
+        heard = analysis.access_points(point.networks, every_bssid=True)
         for key, noise in (("2.4", "noise_24"), ("5", "noise_5"), ("6", "noise_6")):
             drawn = band_png(point, key)
             if not drawn:

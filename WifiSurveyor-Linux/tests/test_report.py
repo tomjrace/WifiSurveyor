@@ -18,6 +18,12 @@ class ReportTests(unittest.TestCase):
         self.assertEqual([(ap["ssid"], ap["rssi"], ap["width"]) for ap in aps],
                          [("Home", -50, 80), ("Cafe", -70, 20)])
 
+    def test_every_bssid_keeps_separate_aps_on_one_channel(self) -> None:
+        aps = access_points([network("Home", -56, freq=2462, channel=11),
+                             network("Home", -62, freq=2462, channel=11),
+                             network("Home", -63, freq=2462, channel=11)], every_bssid=True)
+        self.assertEqual([ap["rssi"] for ap in aps], [-56, -62, -63])
+
     def test_report_holds_each_point_and_its_spectrum_picture(self) -> None:
         project = Project(name="Office <1>")
         project.points = [

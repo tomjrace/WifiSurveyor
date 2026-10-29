@@ -897,7 +897,7 @@ class SurveyView(Gtk.Box):
             point = project.points[index]
             info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             strongest = max((n["rssi"] for n in point.networks), default=None)
-            details = [f"{len(analysis.access_points(point.networks))} access points"]
+            details = [f"{len(analysis.access_points(point.networks, every_bssid=True))} access points"]
             if strongest is not None:
                 details.append(f"strongest {strongest} dBm")
             if point.spectrum:
@@ -3401,7 +3401,7 @@ def _ap_list(point, target: float) -> Gtk.Widget:
     channel, and its level in green, amber or red against the requirement.
     """
     grid = Gtk.Grid(column_spacing=8, row_spacing=4, margin_top=6)
-    aps = analysis.access_points(point.networks)
+    aps = analysis.access_points(point.networks, every_bssid=True)
     grid.attach(Gtk.Label(label=f"Access points heard ({len(aps)})", xalign=0,
                           css_classes=["heading"]), 0, 0, 4, 1)
     for row, ap in enumerate(aps, start=1):

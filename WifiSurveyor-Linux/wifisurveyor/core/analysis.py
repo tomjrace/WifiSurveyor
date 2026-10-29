@@ -1004,11 +1004,12 @@ def noise_sources(project, ctx: Context, limit: int = 5) -> list[dict]:
     return sources
 
 
-def access_points(networks) -> list[dict]:
+def access_points(networks, every_bssid: bool = False) -> list[dict]:
     """
     Scan results, as ``wifi.Reading`` or a survey point's network dicts, reduced to one entry
     per network per channel at its strongest (an AP's several BSSIDs usually share a channel),
-    strongest first.
+    strongest first. With ``every_bssid``, one entry per BSSID instead, so lists that name
+    BSSIDs show every radio a finding counts, including several APs on one channel.
     """
     strongest: dict[tuple[str, float], dict] = {}
     for network in networks:
@@ -1031,7 +1032,7 @@ def access_points(networks) -> list[dict]:
             # Saved with the scan, or looked up now for points measured before that
             "vendor": get("vendor") or oui.vendor(get("bssid") or "", access_point=True),
         }
-        key = (ap["ssid"], freq)
+        key = (ap["bssid"] or ap["ssid"], freq) if every_bssid else (ap["ssid"], freq)
         if key not in strongest or ap["rssi"] > strongest[key]["rssi"]:
             strongest[key] = ap
     return sorted(strongest.values(), key=lambda ap: ap["rssi"], reverse=True)
