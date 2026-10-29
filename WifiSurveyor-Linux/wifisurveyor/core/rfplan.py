@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 CCA_DBM = -82              # a radio heard this strongly makes others on its channel wait
 TU_US = 1024
+MOVE_COST = 15             # what changing one radio's channel has to be worth (see channel_plan)
 
 # ---------- radios ----------
 
@@ -419,6 +420,8 @@ class Suggestion:
     changed: bool
     shared_before: int          # of this network's other radios it contends with, before
     shared_after: int
+    clashes_before: int = 0     # points hearing it and one of those on its channel, before
+    clashes_after: int = 0
 
 
 def _block_name(radio: Radio) -> str:
@@ -455,31 +458,75 @@ def channel_plan(project, ssid: str, allow_dfs: bool = False) -> list[Suggestion
                    if overlaps(other.span, block))
 
     radar = radar_spans(project)
-    order = sorted(keys, key=lambda k: -sum(v for (a, _b), v in conflict.items() if a == k))
-    chosen: dict[tuple, tuple[float, float, str]] = {}
-    for key in order:
-        radio = own[key]
-        best = None
-        for centre, width, name in candidates(radio.band, radio.width, allow_dfs) or \
-                [(radio.center, radio.width, _block_name(radio))]:
-            block = (centre - width / 2, centre + width / 2)
-            cost = 10 * sum(conflict.get((key, other), 0) for other, (c, w, _n) in chosen.items()
-                            if overlaps(block, (c - w / 2, c + w / 2)))
-            cost += foreign_cost(key, block)
-            # Radar heard there: the radio would be forced off it, so it's a last resort
-            cost += 1000 if any(overlaps(block, heard) for heard in radar) else 0
-            # Don't move it for nothing: dodging a neighbour heard at a point or two isn't
-            # worth a change
-            cost -= 2 if abs(centre - radio.center) < 1 else 0
-            if best is None or cost < best[0]:
-                best = (cost, (centre, width, name))
-        chosen[key] = best[1]
+    options = {key: candidates(own[key].band, own[key].width, allow_dfs)
+               or [(own[key].center, own[key].width, _block_name(own[key]))] for key in keys}
 
-    def shared(key, block_of) -> int:
+    def span_of(option) -> tuple[float, float]:
+        return option[0] - option[1] / 2, option[0] + option[1] / 2
+
+    def unmoved(key, option) -> bool:
+        return abs(option[0] - own[key].center) < 1 and option[1] == own[key].width
+
+    def cost(key, option, chosen) -> float:
+        """What one radio on one channel costs, given everyone else's, plus the move itself."""
+        centre, width, _name = option
+        block = (centre - width / 2, centre + width / 2)
+        total = 10 * sum(conflict.get((key, other), 0) for other, (c, w, _n) in chosen.items()
+                         if other != key and overlaps(block, (c - w / 2, c + w / 2)))
+        total += foreign_cost(key, block)
+        # Radar heard there: the radio would be forced off it, so it's a last resort
+        total += 1000 if any(overlaps(block, heard) for heard in radar) else 0
+        # Every change is work for someone and a moment off the air for its clients, so a
+        # move has to clear about one and a half points of clash with the network's own radios
+        return total + (0 if unmoved(key, option) else MOVE_COST)
+
+    def settle(chosen) -> dict:
+        """The single change that helps most, again and again, until none helps."""
+        while True:
+            best = None
+            for key in keys:
+                here = cost(key, chosen[key], chosen)
+                for option in options[key]:
+                    gain = here - cost(key, option, chosen)
+                    if gain > 0.5 and (best is None or gain > best[0]):
+                        best = (gain, key, option)
+            if best is None:
+                return chosen
+            chosen[best[1]] = best[2]
+
+    def total(chosen) -> float:
+        # Each radio's cost counts its clashes with the network's own radios; halve those,
+        # since each is counted from both sides
+        clashes = sum(10 * sum(conflict.get((key, other), 0) for other in keys
+                               if other != key and overlaps(span_of(chosen[key]),
+                                                            span_of(chosen[other])))
+                      for key in keys)
+        return sum(cost(key, chosen[key], chosen) for key in keys) - clashes / 2
+
+    # From the channels as they are, and from a fresh plan built radio by radio (which finds
+    # swaps no single change can), each settled; the cheaper wins, fewer moves on a tie
+    current = {key: next((o for o in options[key] if unmoved(key, o)),
+                         (own[key].center, own[key].width, _block_name(own[key])))
+               for key in keys}
+    fresh: dict[tuple, tuple[float, float, str]] = {}
+    for key in sorted(keys, key=lambda k: -sum(v for (a, _b), v in conflict.items() if a == k)):
+        fresh[key] = min(options[key], key=lambda o: cost(key, o, fresh))
+    tried = [settle(dict(current)), settle(fresh)]
+    chosen = min(tried, key=lambda c: (total(c), sum(not unmoved(k, c[k]) for k in keys)))
+
+    def clashing(key, block_of) -> list[int]:
+        """For each of the network's other radios on its channel, how many points hear both."""
         centre, width = block_of(key)
-        return sum(1 for other in keys if other != key and conflict.get((key, other), 0)
-                   and overlaps((centre - width / 2, centre + width / 2),
-                                (lambda c, w: (c - w / 2, c + w / 2))(*block_of(other))))
+        return [conflict[(key, other)] for other in keys if other != key
+                and conflict.get((key, other), 0)
+                and overlaps((centre - width / 2, centre + width / 2),
+                             (lambda c, w: (c - w / 2, c + w / 2))(*block_of(other)))]
+
+    def now(k):
+        return own[k].center, own[k].width
+
+    def after(k):
+        return chosen[k][0], chosen[k][1]
 
     suggestions = []
     for key in keys:
@@ -487,8 +534,8 @@ def channel_plan(project, ssid: str, allow_dfs: bool = False) -> list[Suggestion
         centre, width, name = chosen[key]
         suggestions.append(Suggestion(
             radio, _block_name(radio), name, abs(centre - radio.center) >= 1 or width != radio.width,
-            shared(key, lambda k: (own[k].center, own[k].width)),
-            shared(key, lambda k: (chosen[k][0], chosen[k][1]))))
+            len(clashing(key, now)), len(clashing(key, after)),
+            sum(clashing(key, now)), sum(clashing(key, after))))
     return sorted(suggestions, key=lambda s: (s.radio.band, s.radio.freq))
 
 

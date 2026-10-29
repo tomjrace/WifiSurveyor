@@ -42,6 +42,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(asked, [project.points[0]])       # only points with a sweep
         self.assertEqual(html.count("<img"), 2)             # the map and one spectrum
         self.assertIn("Weak coverage", html)
+        self.assertIn('querySelectorAll("section.point table")', html)   # sortable
 
     def test_each_range_swept_is_pictured_folded_away(self) -> None:
         project = Project(name="Hall")

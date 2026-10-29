@@ -38,6 +38,11 @@ img { max-width: 100%; border: 1px solid #D9DEE5; border-radius: 6px; display: b
 table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 14px; }
 th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid #E5E9EF; vertical-align: top; }
 th { background: #F3F5F8; font-weight: 600; }
+th.sort { cursor: pointer; user-select: none; }
+th.sort::after { content: " ↕"; color: #9AA5B4; font-weight: 400; }
+th.sort[aria-sort="ascending"]::after { content: " ▲"; color: inherit; }
+th.sort[aria-sort="descending"]::after { content: " ▼"; color: inherit; }
+@media print { th.sort::after { content: none; } }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 2px;
           margin-right: 7px; vertical-align: middle; }
@@ -128,6 +133,9 @@ table.whom th { background: none; color: #5B6778; font-weight: 600; padding-righ
 ul.checklist { list-style: none; padding: 0; }
 ul.checklist li { padding: 5px 0; border-bottom: 1px solid #EEF1F5; }
 ul.checklist input { width: 16px; height: 16px; vertical-align: -2px; }
+ul.checklist ul.checklist { margin: 4px 0 0 26px; }
+ul.checklist ul.checklist li:last-child { border-bottom: 0; }
+ol.steps { margin: 4px 0; padding-left: 22px; font-size: 14px; }
 details.sweeps { border: 1px solid #D9DEE5; border-radius: 8px; margin: 14px 0; }
 details.sweeps > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; }
 details.sweeps > summary .muted { font-weight: 400; }
@@ -183,6 +191,50 @@ FOLDING = """<script>
     if (link && link.getAttribute("href") === location.hash) setTimeout(reveal);
   });
   reveal();
+})();
+</script>"""
+# Each point's tables sort by a column when its heading is clicked: numbers (signal, channel,
+# width) by value, levels strongest first, everything else in order; again to reverse
+SORTING = """<script>
+(() => {
+  const value = cell => {
+    const text = cell.textContent.trim();
+    const number = text.match(/^[~≈]?\\s*(-?\\d+(?:\\.\\d+)?)\\s*(dBm|dB|MHz|GHz|ms|%)?$/);
+    return {text, number: number ? parseFloat(number[1]) : null, level: !!number && /dB/.test(number[2] || "")};
+  };
+  document.querySelectorAll("section.point table").forEach(table => {
+    const rows = [...table.rows];
+    if (rows.length < 3) return;
+    const head = rows[0];
+    [...head.cells].forEach((th, column) => {
+      th.classList.add("sort");
+      th.tabIndex = 0;
+      const sort = () => {
+        const body = [...table.rows].slice(1);
+        const values = body.map(row => value(row.cells[column] || row.insertCell()));
+        // A number column may say "not heard" in places: those sort after the numbers
+        const numeric = values.some(v => v.number !== null)
+          && values.every(v => v.number !== null || !/\\d/.test(v.text));
+        if (numeric) values.forEach(v => { if (v.number === null) v.text = ""; });
+        const first = numeric && values.some(v => v.level);   // levels start strongest first
+        const descending = th.getAttribute("aria-sort") === (first ? "descending" : "ascending")
+          ? !first : first;
+        const order = body.map((row, i) => [row, values[i]]).sort(([, a], [, b]) => {
+          if (a.text === "" || b.text === "") return (a.text === "") - (b.text === "");
+          const by = numeric ? a.number - b.number
+            : a.text.localeCompare(b.text, undefined, {numeric: true, sensitivity: "base"});
+          return descending ? -by : by;
+        });
+        [...head.cells].forEach(other => other.removeAttribute("aria-sort"));
+        th.setAttribute("aria-sort", descending ? "descending" : "ascending");
+        order.forEach(([row]) => row.parentNode.appendChild(row));
+      };
+      th.addEventListener("click", sort);
+      th.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); sort(); }
+      });
+    });
+  });
 })();
 </script>"""
 # Printing shows every collapsed section's pictures, then puts them back as they were
@@ -264,6 +316,7 @@ def _overview(themes: list[overview.Theme], chip: Callable[[int], str]) -> str:
                          + "</div>") if item.points else ""
                 html.append(f"<li><span class=\"sev sev-{item.priority}\">{item.priority}</span> "
                             f"<b>{escape(item.action)}</b>"
+                            + _steps(item) +
                             f"<div class=\"why\">{escape(item.why)}</div>"
                             f"<div class=\"benefit\">{escape(item.benefit)}</div>{where}</li>")
             html.append("</ul>")
@@ -704,17 +757,21 @@ def build_html(project, map_png: bytes | None,
                     + (f" (and {escape(', '.join(also))})" if also else "") + "</h2>")
         html.append("<p class=\"muted\">Keeps the network's own radios off each other's "
                     f"channels first, then away from other networks{'' if allow_dfs else ', without DFS channels'}. "
-                    "Shares is how many of the network's other radios are heard on the same "
-                    "channel where this one is.</p>")
-        html.append("<table><tr><th>Radio</th><th>Networks</th><th>Now</th><th>Suggested</th>"
-                    "<th class=\"num\">Shares a channel with, now → after</th></tr>")
+                    "Clashes is how many points hear this radio and another of the network's on "
+                    "the same channel, counted once for each other radio.</p>")
+        html.append("<table><tr><th>Radio</th><th>Access point</th><th>Strongest at</th>"
+                    "<th>Networks</th><th>Now</th><th>Suggested</th>"
+                    "<th class=\"num\">Clashes, now → after</th></tr>")
         for item in plan:
             macs = ", ".join(sorted(b.upper() for b in item.radio.bssids)[:2])
+            site, number, rssi = overview.radio_whereabouts(project, sites, item.radio)
             html.append(f"<tr><td>{escape(macs)}</td>"
+                        f"<td>{site or '<span class=muted>not located</span>'}</td>"
+                        f"<td>{chip(number) + f' {rssi} dBm' if number else ''}</td>"
                         f"<td>{escape(', '.join(sorted(item.radio.ssids)) or '(hidden)')}</td>"
                         f"<td>{escape(item.current)}</td>"
                         f"<td>{escape(item.suggested if item.changed else 'keep')}</td>"
-                        f"<td class=\"num\">{item.shared_before} → {item.shared_after}</td></tr>")
+                        f"<td class=\"num\">{item.clashes_before} → {item.clashes_after}</td></tr>")
         html.append("</table>")
 
     # ----- each point -----
@@ -772,6 +829,7 @@ def build_html(project, map_png: bytes | None,
     html.append(_method(project, ctx, version))
     html.append(SECTIONS_END)
     html.append(FOLDING)
+    html.append(SORTING)
     html.append(PRINT_OPENS)
     html.append("</body></html>")
     return _fold_sections("\n".join(html))
@@ -938,6 +996,13 @@ def _area_cards(project, ctx, ssid, band) -> str:
             "point.</p>")
 
 
+def _steps(item) -> str:
+    """A recommendation's changes one by one, when it has several to make."""
+    if not item.steps:
+        return ""
+    return "<ol class=\"steps\">" + "".join(f"<li>{escape(s)}</li>" for s in item.steps) + "</ol>"
+
+
 def _checklist(themes) -> str:
     """Every recommendation that matters, as boxes to tick off on a printout."""
     items = [(theme, item) for theme in themes if theme.key != "survey" for item in theme.items
@@ -950,7 +1015,11 @@ def _checklist(themes) -> str:
         f"{escape(item.action)}"
         + (f' <span class="muted">(points {", ".join(str(n) for n in item.points)})</span>'
            if item.points else "")
-        + "</label></li>" for theme, item in items)
+        + "</label>"
+        + ("<ul class=\"checklist\">" + "".join(
+            f'<li><label><input type="checkbox"> {escape(step)}</label></li>'
+            for step in item.steps) + "</ul>" if item.steps else "")
+        + "</li>" for theme, item in items)
     return ('<h3 class="sub" id="checklist">Checklist</h3><p class="muted">For whoever makes the '
             "changes: tick each off, then survey again to confirm.</p>"
             f'<ul class="checklist">{rows}</ul>')

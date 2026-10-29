@@ -1,6 +1,6 @@
 import unittest
 
-from wifisurveyor.core import report, rfplan
+from wifisurveyor.core import overview, report, rfplan
 from wifisurveyor.core.project import Point, Project
 
 
@@ -65,6 +65,33 @@ class AuditAndPlanTests(unittest.TestCase):
         self.assertEqual([s.shared_before for s in plan], [1, 1])
         self.assertEqual([s.shared_after for s in plan], [0, 0])
         self.assertIn("ch 149–161 (80 MHz)", {s.suggested for s in plan})
+        self.assertEqual([s.clashes_before for s in plan], [2, 2])     # heard together twice
+        self.assertEqual([s.clashes_after for s in plan], [0, 0])
+        steps = overview.channel_steps(Project(points=points), [], ["Corp"], plan)
+        self.assertEqual(len(steps), 1)
+        self.assertIn("heard strongest at point 1", steps[0])
+        self.assertIn("from channel 36–48 (80 MHz) to channel 149–161 (80 MHz)", steps[0])
+        self.assertIn("2 times now, 0 after", steps[0])
+
+    def test_channel_plan_leaves_a_slight_clash_alone(self) -> None:
+        # Heard together at one point only: not worth the work of a change
+        points = [Point(x=0, y=0, networks=[
+            net("Corp", "00:00:00:00:01:01", -55, 5180, 5210, 80),
+            net("Corp", "00:00:00:00:02:01", -60, 5180, 5210, 80),
+        ]), Point(x=1, y=0, networks=[net("Corp", "00:00:00:00:01:01", -55, 5180, 5210, 80)])]
+        plan = rfplan.channel_plan(Project(points=points), "Corp")
+        self.assertFalse(any(s.changed for s in plan))
+
+    def test_channel_plan_moves_only_the_radio_that_clashes(self) -> None:
+        # Three radios on 2.4 GHz, two of them on channel 6 heard together everywhere
+        points = [Point(x=i, y=0, networks=[
+            net("Corp", "00:00:00:00:01:01", -50, 2412),
+            net("Corp", "00:00:00:00:02:01", -55, 2437),
+            net("Corp", "00:00:00:00:03:01", -60, 2437),
+        ]) for i in range(4)]
+        plan = rfplan.channel_plan(Project(points=points), "Corp")
+        self.assertEqual(sum(s.changed for s in plan), 1)
+        self.assertEqual(sum(s.clashes_after for s in plan), 0)    # channel 11 was free
 
 
     def test_report_sections(self) -> None:

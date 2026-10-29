@@ -56,6 +56,7 @@ class Recommendation:
     why: str                       # what the survey found that calls for it
     benefit: str                   # what users will notice afterwards
     points: list[int] = field(default_factory=list)      # 1-based point numbers it concerns
+    steps: list[str] = field(default_factory=list)       # each change to make, one by one
 
 
 @dataclass
@@ -120,7 +121,7 @@ def build(project, ctx: analysis.Context, ssid: str | None, band: str,
         "coverage": lambda: _coverage(project, ctx, at, sites, total,
                                       sorted(networks.get("Only 2.4 GHz reaches", set())
                                              | networks.get("5 GHz too weak", set()))),
-        "capacity": lambda: _capacity(project, ctx, at, audit, ours, allow_dfs, total),
+        "capacity": lambda: _capacity(project, ctx, at, audit, ours, allow_dfs, total, sites),
         "connection": lambda: _connection(project, at, ours, total),
         "security": lambda: _security(project, at, names, ours),
         "survey": lambda: _survey(project, at, total),
@@ -416,24 +417,76 @@ def _reach_hint(project, ctx, sites) -> str:
             "through walls, so plan spacing around that.")
 
 
-def _capacity(project, ctx, at, audit, ours, allow_dfs, total):
+def radio_whereabouts(project, sites, radio: rfplan.Radio) -> tuple[int | None, int | None, int | None]:
+    """
+    Where to find one radio: the number of the access point it belongs to in the report's
+    Access points table (None if it wasn't located), and the point it's heard strongest at,
+    with that level.
+    """
+    bssids = {b.lower() for b in radio.bssids if b}
+    site = next((i + 1 for i, s in enumerate(sites)
+                 if bssids & {b.lower() for b in s.get("bssids", [])}), None)
+    strongest = None
+    for number, point in enumerate(project.points, start=1):
+        for other in rfplan.radios(point.networks):
+            if other.key == radio.key and (strongest is None or other.rssi > strongest[1]):
+                strongest = (number, other.rssi)
+    return (site, *(strongest or (None, None)))
+
+
+def channel_steps(project, sites, names: list[str], plan: list[rfplan.Suggestion]) -> list[str]:
+    """Each channel change of a plan as a step someone can find the radio for and make."""
+    steps = []
+    for item in plan:
+        if not item.changed:
+            continue
+        radio = item.radio
+        site, number, rssi = radio_whereabouts(project, sites, radio)
+        bssid = sorted(b.upper() for b in radio.bssids if b)[:1]
+        which = (f"Access point {site}" if site else "The access point") + (
+            f" (BSSID {bssid[0]})" if bssid else "")
+        found = f", heard strongest at point {number} ({rssi} dBm)" if number else ""
+        others = " and ".join(n for n in names if n in radio.ssids) or names[0]
+        heard = (f"Points hear it with another {others} radio on its channel "
+                 f"{_plural(item.clashes_before, 'time')} now, {item.clashes_after} after "
+                 "the changes")
+        if not item.clashes_before and not item.clashes_after:
+            why = (f"It doesn't share a channel with another {others} radio either way, but "
+                   "fewer other networks are on its new channel where it serves")
+        elif item.clashes_after < item.clashes_before:
+            why = heard
+        else:
+            why = heard + ": it moves to make room for radios that clash more"
+        steps.append(f"{which}{found}: move its {radio.band} GHz radio from "
+                     f"{item.current.replace('ch ', 'channel ')} to "
+                     f"{item.suggested.replace('ch ', 'channel ')}. {why}.")
+    return steps
+
+
+def _capacity(project, ctx, at, audit, ours, allow_dfs, total, sites=()):
     items: list[Recommendation] = []
     planned = rfplan.plans(project, ours, allow_dfs)
     for name, also, plan in planned:
         moves = [s for s in plan if s.changed]
         if moves:
-            before = sum(s.shared_before for s in plan)
-            after = sum(s.shared_after for s in plan)
+            # Each clash is counted from both radios' side
+            before = sum(s.clashes_before for s in plan) // 2
+            after = sum(s.clashes_after for s in plan) // 2
+            names = [name, *also]
             items.append(Recommendation(
-                "High" if before - after >= 2 else "Medium",
-                f"Apply the suggested channel plan: {_plural(len(moves), 'radio')} of "
-                f"{' and '.join([name, *also])} change channel ("
-                + "; ".join(f"{s.current} → {s.suggested}" for s in moves[:4])
-                + ("…" if len(moves) > 4 else "") + ").",
-                f"The network's radios share channels with each other {before} times now, "
-                f"{after} after.",
+                "High" if before - after >= max(4, before / 3) else "Medium",
+                f"Apply the suggested channel plan for {' and '.join(names)}: change the "
+                f"channel on {_plural(len(moves), 'radio')} of {len(plan)}, as listed. Make "
+                "every change together, since some only help once the others are made, and "
+                "set fixed channels so automatic channel selection doesn't move them back.",
+                f"Two of the network's radios on the same channel, heard together above "
+                f"{rfplan.CCA_DBM} dBm, have to take turns to transmit. That happens "
+                f"{_plural(before, 'time')} across the survey's points now "
+                f"(a point hearing three counts each pair), and {after or 'none'} after the "
+                "change. The full report's Suggested channel plan table lists every radio.",
                 "Neighbouring access points stop taking turns with each other, so each gets "
-                "more airtime."))
+                "more airtime.",
+                steps=channel_steps(project, sites, names, plan)))
     shared = at("Co-channel contention")
     if shared:
         items.append(Recommendation(
