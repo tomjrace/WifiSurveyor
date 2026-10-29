@@ -481,7 +481,9 @@ Each sweep also keeps a picture of the whole spectrum as the Spectrum page would
 with the access points heard there marked. **Export report…** in the main menu writes one
 self-contained HTML file: what's limiting coverage across the survey, the map with its rings,
 and for each point its diagnosis, the access points heard and that spectrum picture. Points
-measured before pictures were kept, or on Windows, get one drawn from their sweeps.
+measured before pictures were kept, or on Windows, get one drawn from their sweeps. Each
+point's tables list every BSSID heard, so several access points of one network on the same
+channel each get a row, and tapping a column heading sorts by it (again to reverse).
 
 Under Heatmap, **Network** filters the map to one SSID and **Access point** narrows it further
 to a single BSSID (each listed with its manufacturer). The **Signal quality** panel below
@@ -514,9 +516,15 @@ too many SSIDs on one radio, 40 MHz or overlapping channels on 2.4 GHz, and, wit
 network, access points that differ in security, basic rates or 802.11k/v/r roaming support.
 **Channel plan** suggests channels for the network chosen under Heatmap: it keeps the
 network's own radios apart wherever a point hears two of them above −82 dBm, then away from
-other networks, and leaves a radio where it is unless moving it helps. Access points near
-each other on different channels is right; the plan's job is to find which channels. DFS
-channels are left out unless **Include DFS channels** is on. Both also go in the report.
+other networks, and changes as few radios as it can: it starts from the channels as they are
+and moves a radio only when that clears enough clashes to be worth the work, so it suggests a
+handful of changes rather than reshuffling the site for nearly the same result. Access points
+near each other on different channels is right; the plan's job is to find which channels. DFS
+channels are left out unless **Include DFS channels** is on. Both also go in the report, where
+the recommendation lists each change as a step to tick off: the access point (numbered as in
+the access point table), its BSSID, the point it's heard strongest at, the channel now and
+suggested, and how many clashes it has before and after. The changes are meant to be made
+together, with the channels then fixed so automatic channel selection doesn't undo them.
 
 With **Check the connection** on (the default) and the scanning adapter connected, each point
 also records latency, jitter and packet loss to the gateway and how long a DNS lookup takes,
@@ -762,8 +770,11 @@ Each session, one per band, is written as it goes to its own folder under
 `~/.local/share/wifisurveyor/monitor/`: `session.jsonl` with every check and incident, and the
 incident captures. **Export incidents…** saves them as a spreadsheet, every band in one file.
 While a session runs, its adapters are left alone by the other pages, and closing the app asks
-first. The machine mustn't sleep meanwhile: turn off automatic suspend in GNOME's power settings
-for a long watch.
+first. While watching, the app keeps the computer from sleeping (through logind, so it works run
+as root or not), letting go on battery at 15% or below. If the computer sleeps anyway (low
+battery, the lid, the suspend menu), the watch first ends any outage in progress at that moment,
+writes its log safely to disk and pauses; on waking it rejoins the network and carries on in the
+same session, without counting the sleep or the rejoin as an outage.
 
 **Spectrum** draws the live trace and peak hold from the analyzer with Wi-Fi channels
 marked. **All Wi-Fi bands (US)**, the default, goes round every US Wi-Fi range in turn and shows

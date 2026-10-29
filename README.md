@@ -26,8 +26,10 @@ site against Data, Voice, Video or Location requirements, plan new access points
 predicted coverage, and compare against an earlier survey of the same site to see what changed.
 
 **Reports.** One self-contained HTML file: what to improve, grouped by theme and placed on the
-plan, the maps, the access points, and every point's findings and spectrum. An overview
-version gives whoever makes the changes just the to-do list and maps.
+plan, the maps, the access points, and every point's findings and spectrum, with tables you can
+sort by any column. A suggested channel plan changes as few radios as it can and lists each
+change as its own step: which access point, where to find it, and what moving it fixes. An
+overview version gives whoever makes the changes just the to-do list and maps.
 
 **Watch.** Stays with one network for hours or days, drawn like a patient monitor: a heartbeat
 per check, beacons, channel use and the access point's load, with the vital signs beside them.
@@ -35,7 +37,9 @@ It watches both bands of a network at once with separate adapters, stacked on on
 you can see whether a drop hit one radio or the whole unit. Each incident is diagnosed from the
 evidence: the access point rebooting, one radio restarting, forged deauthentications, a channel
 change, interference, the gateway, DHCP, DNS or the internet behind it, or just this computer's
-adapter. Red and amber are kept for what someone using the network would notice.
+adapter. Red and amber are kept for what someone using the network would notice. It keeps the
+computer awake while it watches, and if the computer sleeps anyway it pauses cleanly and picks up
+on waking.
 
 **Discover.** Nearby access points with their manufacturers, refreshed every few seconds.
 
